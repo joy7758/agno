@@ -660,6 +660,16 @@ class Step:
                         if store_executor_outputs and workflow_run_response is not None:
                             self._store_executor_response(workflow_run_response, response)  # type: ignore
 
+                        # Check if agent/team response is paused (e.g., due to tool HITL)
+                        # This is NOT supported at workflow level - warn the user
+                        if hasattr(response, "is_paused") and response.is_paused:
+                            logger.warning(
+                                f"Step '{self.name}': Agent/Team response is paused (likely due to tool HITL). "
+                                "Agent tool-level HITL is NOT propagated to the workflow. "
+                                "The workflow will continue but the paused tool may not have executed. "
+                                "Consider using workflow-level HITL (Step.requires_confirmation) instead."
+                            )
+
                         # Switch back to workflow logger after execution
                         use_workflow_logger()
                     else:
@@ -943,6 +953,16 @@ class Step:
                         if store_executor_outputs and workflow_run_response is not None:
                             self._store_executor_response(workflow_run_response, active_executor_run_response)  # type: ignore
 
+                        # Check if agent/team response is paused (e.g., due to tool HITL)
+                        # This is NOT supported at workflow level - warn the user
+                        if hasattr(active_executor_run_response, "is_paused") and active_executor_run_response.is_paused:
+                            logger.warning(
+                                f"Step '{self.name}': Agent/Team response is paused (likely due to tool HITL). "
+                                "Agent tool-level HITL is NOT propagated to the workflow. "
+                                "The workflow will continue but the paused tool may not have executed. "
+                                "Consider using workflow-level HITL (Step.requires_confirmation) instead."
+                            )
+
                         final_response = active_executor_run_response  # type: ignore
 
                     else:
@@ -1202,6 +1222,16 @@ class Step:
 
                         if store_executor_outputs and workflow_run_response is not None:
                             self._store_executor_response(workflow_run_response, response)  # type: ignore
+
+                        # Check if agent/team response is paused (e.g., due to tool HITL)
+                        # This is NOT supported at workflow level - warn the user
+                        if hasattr(response, "is_paused") and response.is_paused:
+                            logger.warning(
+                                f"Step '{self.name}': Agent/Team response is paused (likely due to tool HITL). "
+                                "Agent tool-level HITL is NOT propagated to the workflow. "
+                                "The workflow will continue but the paused tool may not have executed. "
+                                "Consider using workflow-level HITL (Step.requires_confirmation) instead."
+                            )
 
                         # Switch back to workflow logger after execution
                         use_workflow_logger()
@@ -1479,6 +1509,16 @@ class Step:
 
                         if store_executor_outputs and workflow_run_response is not None:
                             self._store_executor_response(workflow_run_response, active_executor_run_response)  # type: ignore
+
+                        # Check if agent/team response is paused (e.g., due to tool HITL)
+                        # This is NOT supported at workflow level - warn the user
+                        if hasattr(active_executor_run_response, "is_paused") and active_executor_run_response.is_paused:
+                            logger.warning(
+                                f"Step '{self.name}': Agent/Team response is paused (likely due to tool HITL). "
+                                "Agent tool-level HITL is NOT propagated to the workflow. "
+                                "The workflow will continue but the paused tool may not have executed. "
+                                "Consider using workflow-level HITL (Step.requires_confirmation) instead."
+                            )
 
                         final_response = active_executor_run_response  # type: ignore
                     else:
