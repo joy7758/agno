@@ -66,8 +66,21 @@ class BackupStorage:
             raise ValueError(f"Unsupported backup storage config type: {type(self.storage_config).__name__}")
 
     async def astore(self, content_id: str, filename: str, file_data: bytes) -> Dict[str, Any]:
-        """Async version of store. Uses sync calls since boto3 is sync-only."""
-        return self.store(content_id, filename, file_data)
+        """Async version of store.
+
+        Uses true async I/O for Azure Blob and local filesystem.
+        Note: S3 and GCS use sync SDK calls as they don't have async APIs.
+        """
+        if isinstance(self.storage_config, S3Config):
+            return self._store_to_s3(content_id, filename, file_data)
+        elif isinstance(self.storage_config, LocalStorageConfig):
+            return await self._astore_to_local(content_id, filename, file_data)
+        elif isinstance(self.storage_config, AzureBlobConfig):
+            return await self._astore_to_azure_blob(content_id, filename, file_data)
+        elif isinstance(self.storage_config, GcsConfig):
+            return self._store_to_gcs(content_id, filename, file_data)
+        else:
+            raise ValueError(f"Unsupported backup storage config type: {type(self.storage_config).__name__}")
 
     # ==========================================
     # FETCH - Retrieve raw content
@@ -95,8 +108,22 @@ class BackupStorage:
             raise ValueError(f"Unknown backup storage type: {backup_storage_type}")
 
     async def afetch(self, agno_metadata: Dict[str, Any]) -> bytes:
-        """Async version of fetch."""
-        return self.fetch(agno_metadata)
+        """Async version of fetch.
+
+        Uses true async I/O for Azure Blob and local filesystem.
+        Note: S3 and GCS use sync SDK calls as they don't have async APIs.
+        """
+        backup_storage_type = agno_metadata.get("backup_storage_type")
+        if backup_storage_type == "s3":
+            return self._fetch_from_s3(agno_metadata)
+        elif backup_storage_type == "local":
+            return await self._afetch_from_local(agno_metadata)
+        elif backup_storage_type == "azure_blob":
+            return await self._afetch_from_azure_blob(agno_metadata)
+        elif backup_storage_type == "gcs":
+            return self._fetch_from_gcs(agno_metadata)
+        else:
+            raise ValueError(f"Unknown backup storage type: {backup_storage_type}")
 
     # ==========================================
     # FETCH FROM ORIGINAL SOURCE
@@ -125,12 +152,32 @@ class BackupStorage:
             raise ValueError(f"Unsupported source type for refresh: {source_type}")
 
     async def afetch_from_source(self, agno_metadata: Dict[str, Any]) -> bytes:
-        """Async version of fetch_from_source."""
-        return self.fetch_from_source(agno_metadata)
+        """Async version of fetch_from_source.
+
+        Uses true async I/O for Azure Blob, SharePoint, and GitHub.
+        Note: S3 and GCS use sync SDK calls as they don't have async APIs.
+        """
+        source_type = agno_metadata.get("source_type")
+        if not source_type:
+            raise ValueError("No source_type in metadata, cannot fetch from original source")
+
+        if source_type == "s3":
+            return self._fetch_original_s3(agno_metadata)
+        elif source_type == "gcs":
+            return self._fetch_original_gcs(agno_metadata)
+        elif source_type == "sharepoint":
+            return await self._afetch_original_sharepoint(agno_metadata)
+        elif source_type == "github":
+            return await self._afetch_original_github(agno_metadata)
+        elif source_type == "azure_blob":
+            return await self._afetch_original_azure_blob(agno_metadata)
+        else:
+            raise ValueError(f"Unsupported source type for refresh: {source_type}")
 
     # ==========================================
     # S3 BACKUP STORAGE
     # ==========================================
+    # Note: Uses sync boto3 calls as boto3 doesn't have an async API.
 
     def _store_to_s3(self, content_id: str, filename: str, file_data: bytes) -> Dict[str, Any]:
         """Store backup content to S3."""
@@ -239,6 +286,32 @@ class BackupStorage:
             "backup_storage_config_id": config.id,
         }
 
+    async def _astore_to_local(self, content_id: str, filename: str, file_data: bytes) -> Dict[str, Any]:
+        """Store backup content to local filesystem (async)."""
+        import aiofiles
+
+        config = self.storage_config
+        if not isinstance(config, LocalStorageConfig):
+            raise ValueError("Storage config is not LocalStorageConfig")
+
+        if self.knowledge_id:
+            dir_path = os.path.join(config.base_path, self.knowledge_id, content_id)
+        else:
+            dir_path = os.path.join(config.base_path, content_id)
+        os.makedirs(dir_path, exist_ok=True)
+        file_path = os.path.join(dir_path, filename)
+
+        async with aiofiles.open(file_path, "wb") as f:
+            await f.write(file_data)
+
+        log_info(f"Stored backup to {file_path}")
+
+        return {
+            "backup_storage_type": "local",
+            "backup_storage_path": file_path,
+            "backup_storage_config_id": config.id,
+        }
+
     def _fetch_from_local(self, agno_metadata: Dict[str, Any]) -> bytes:
         """Fetch backup content from local filesystem."""
         file_path = agno_metadata.get("backup_storage_path")
@@ -250,6 +323,20 @@ class BackupStorage:
 
         with open(file_path, "rb") as f:
             return f.read()
+
+    async def _afetch_from_local(self, agno_metadata: Dict[str, Any]) -> bytes:
+        """Fetch backup content from local filesystem (async)."""
+        import aiofiles
+
+        file_path = agno_metadata.get("backup_storage_path")
+        if not file_path:
+            raise ValueError("Missing backup_storage_path in metadata")
+
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Backup file not found: {file_path}")
+
+        async with aiofiles.open(file_path, "rb") as f:
+            return await f.read()
 
     # ==========================================
     # AZURE BLOB BACKUP STORAGE
@@ -301,6 +388,52 @@ class BackupStorage:
             "backup_storage_config_id": config.id,
         }
 
+    async def _astore_to_azure_blob(self, content_id: str, filename: str, file_data: bytes) -> Dict[str, Any]:
+        """Store backup content to Azure Blob Storage (async)."""
+        try:
+            from azure.identity.aio import ClientSecretCredential  # type: ignore
+            from azure.storage.blob.aio import BlobServiceClient  # type: ignore
+        except ImportError:
+            raise ImportError(
+                "The `azure-identity` and `azure-storage-blob` packages are not installed. "
+                "Please install them via `pip install azure-identity azure-storage-blob`."
+            )
+
+        config = self.storage_config
+        if not isinstance(config, AzureBlobConfig):
+            raise ValueError("Storage config is not AzureBlobConfig")
+
+        prefix = config.prefix.rstrip("/") if config.prefix else "raw"
+        if self.knowledge_id:
+            blob_name = f"{prefix}/{self.knowledge_id}/{content_id}/{filename}"
+        else:
+            blob_name = f"{prefix}/{content_id}/{filename}"
+
+        credential = ClientSecretCredential(
+            tenant_id=config.tenant_id,
+            client_id=config.client_id,
+            client_secret=config.client_secret,
+        )
+
+        blob_service = BlobServiceClient(
+            account_url=f"https://{config.storage_account}.blob.core.windows.net",
+            credential=credential,
+        )
+
+        async with blob_service:
+            blob_client = blob_service.get_blob_client(container=config.container, blob=blob_name)
+            await blob_client.upload_blob(file_data, overwrite=True)
+
+        log_info(f"Stored backup to azure://{config.storage_account}/{config.container}/{blob_name}")
+
+        return {
+            "backup_storage_type": "azure_blob",
+            "backup_storage_blob_name": blob_name,
+            "backup_storage_container": config.container,
+            "backup_storage_account": config.storage_account,
+            "backup_storage_config_id": config.id,
+        }
+
     def _fetch_from_azure_blob(self, agno_metadata: Dict[str, Any]) -> bytes:
         """Fetch backup content from Azure Blob Storage."""
         try:
@@ -341,9 +474,52 @@ class BackupStorage:
         blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
         return blob_client.download_blob().readall()
 
+    async def _afetch_from_azure_blob(self, agno_metadata: Dict[str, Any]) -> bytes:
+        """Fetch backup content from Azure Blob Storage (async)."""
+        try:
+            from azure.identity.aio import ClientSecretCredential  # type: ignore
+            from azure.storage.blob.aio import BlobServiceClient  # type: ignore
+        except ImportError:
+            raise ImportError(
+                "The `azure-identity` and `azure-storage-blob` packages are not installed. "
+                "Please install them via `pip install azure-identity azure-storage-blob`."
+            )
+
+        container = agno_metadata.get("backup_storage_container")
+        blob_name = agno_metadata.get("backup_storage_blob_name")
+        storage_account = agno_metadata.get("backup_storage_account")
+        config_id = agno_metadata.get("backup_storage_config_id")
+
+        if not container or not blob_name or not storage_account:
+            raise ValueError(
+                "Missing backup_storage_container, backup_storage_blob_name, or backup_storage_account in metadata"
+            )
+
+        config = self._resolve_config(config_id)
+
+        if not isinstance(config, AzureBlobConfig):
+            raise ValueError(f"Config {config_id} is not an AzureBlobConfig")
+
+        credential = ClientSecretCredential(
+            tenant_id=config.tenant_id,
+            client_id=config.client_id,
+            client_secret=config.client_secret,
+        )
+
+        blob_service = BlobServiceClient(
+            account_url=f"https://{storage_account}.blob.core.windows.net",
+            credential=credential,
+        )
+
+        async with blob_service:
+            blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
+            download_stream = await blob_client.download_blob()
+            return await download_stream.readall()
+
     # ==========================================
     # GCS BACKUP STORAGE
     # ==========================================
+    # Note: Uses sync google-cloud-storage calls as it doesn't have an async API.
 
     def _store_to_gcs(self, content_id: str, filename: str, file_data: bytes) -> Dict[str, Any]:
         """Store backup content to Google Cloud Storage."""
@@ -415,7 +591,7 @@ class BackupStorage:
         return blob.download_as_bytes()
 
     # ==========================================
-    # ORIGINAL SOURCE FETCHERS
+    # ORIGINAL SOURCE FETCHERS (sync)
     # ==========================================
 
     def _fetch_original_s3(self, agno_metadata: Dict[str, Any]) -> bytes:
@@ -572,6 +748,121 @@ class BackupStorage:
 
         blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
         return blob_client.download_blob().readall()
+
+    # ==========================================
+    # ORIGINAL SOURCE FETCHERS (async)
+    # ==========================================
+
+    async def _afetch_original_sharepoint(self, agno_metadata: Dict[str, Any]) -> bytes:
+        """Fetch content from original SharePoint source (async)."""
+        import httpx
+
+        config_id = agno_metadata.get("source_config_id")
+        config = self._resolve_config(config_id)
+
+        if not config or not isinstance(config, SharePointConfig):
+            raise ValueError(f"SharePoint config {config_id} not found or invalid")
+
+        sp_config = cast(SharePointConfig, config)
+        # MSAL token acquisition is sync-only (local computation + token cache)
+        access_token = sp_config._get_access_token()
+        if not access_token:
+            raise ValueError("Failed to acquire SharePoint access token")
+
+        # Get site ID using async HTTP
+        if sp_config.site_id:
+            site_id: Optional[str] = sp_config.site_id
+        else:
+            if sp_config.site_path:
+                site_url = f"https://graph.microsoft.com/v1.0/sites/{sp_config.hostname}:/{sp_config.site_path}"
+            else:
+                site_url = f"https://graph.microsoft.com/v1.0/sites/{sp_config.hostname}"
+            async with httpx.AsyncClient() as client:
+                site_response = await client.get(site_url, headers={"Authorization": f"Bearer {access_token}"})
+                site_id = site_response.json().get("id") if site_response.status_code == 200 else None
+
+        if not site_id:
+            raise ValueError("Failed to get SharePoint site ID")
+
+        file_path = agno_metadata.get("sharepoint_file_path")
+        if not file_path:
+            raise ValueError("Missing sharepoint_file_path in metadata")
+
+        headers = {"Authorization": f"Bearer {access_token}"}
+        encoded_path = file_path.strip("/")
+        url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{encoded_path}:/content"
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers, follow_redirects=True)
+            if response.status_code != 200:
+                raise ValueError(f"SharePoint download failed: {response.status_code} - {response.text}")
+            return response.content
+
+    async def _afetch_original_github(self, agno_metadata: Dict[str, Any]) -> bytes:
+        """Fetch content from original GitHub source (async)."""
+        import httpx
+
+        config_id = agno_metadata.get("source_config_id")
+        config = self._resolve_config(config_id)
+
+        repo = agno_metadata.get("github_repo")
+        file_path = agno_metadata.get("github_file_path")
+        branch = agno_metadata.get("github_branch", "main")
+
+        if not repo or not file_path:
+            raise ValueError("Missing github_repo or github_file_path in metadata")
+
+        headers: Dict[str, str] = {"Accept": "application/vnd.github.v3.raw"}
+        if config and hasattr(config, "token") and config.token:
+            headers["Authorization"] = f"token {config.token}"
+
+        url = f"https://api.github.com/repos/{repo}/contents/{file_path}?ref={branch}"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers)
+            if response.status_code != 200:
+                raise ValueError(f"GitHub download failed: {response.status_code} - {response.text}")
+            return response.content
+
+    async def _afetch_original_azure_blob(self, agno_metadata: Dict[str, Any]) -> bytes:
+        """Fetch content from original Azure Blob source (async)."""
+        try:
+            from azure.identity.aio import ClientSecretCredential  # type: ignore
+            from azure.storage.blob.aio import BlobServiceClient  # type: ignore
+        except ImportError:
+            raise ImportError(
+                "The `azure-identity` and `azure-storage-blob` packages are not installed. "
+                "Please install them via `pip install azure-identity azure-storage-blob`."
+            )
+
+        config_id = agno_metadata.get("source_config_id")
+        config = self._resolve_config(config_id)
+
+        storage_account = agno_metadata.get("azure_storage_account")
+        container = agno_metadata.get("azure_container")
+        blob_name = agno_metadata.get("azure_blob_name")
+
+        if not storage_account or not container or not blob_name:
+            raise ValueError("Missing azure_storage_account, azure_container, or azure_blob_name in metadata")
+
+        if not config or not isinstance(config, AzureBlobConfig):
+            raise ValueError(f"Azure Blob config {config_id} not found or invalid")
+
+        azure_config = cast(AzureBlobConfig, config)
+        credential = ClientSecretCredential(
+            tenant_id=azure_config.tenant_id,
+            client_id=azure_config.client_id,
+            client_secret=azure_config.client_secret,
+        )
+
+        blob_service = BlobServiceClient(
+            account_url=f"https://{storage_account}.blob.core.windows.net",
+            credential=credential,
+        )
+
+        async with blob_service:
+            blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
+            download_stream = await blob_client.download_blob()
+            return await download_stream.readall()
 
     # ==========================================
     # HELPERS

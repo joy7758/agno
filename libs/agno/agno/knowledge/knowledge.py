@@ -850,7 +850,7 @@ class Knowledge(RemoteKnowledge):
         if content is None:
             raise ValueError(f"Content {content_id} not found")
 
-        file_bytes, filename = self._resolve_refresh_source(content)
+        file_bytes, filename = await self._aresolve_refresh_source(content)
 
         # Reconstruct the reader from stored processing config
         content.reader = self._reconstruct_reader_from_processing(content)
@@ -953,6 +953,67 @@ class Knowledge(RemoteKnowledge):
             raise ValueError("Cannot refresh URL content: no source_url in metadata")
 
         response = fetch_with_retry(source_url)
+        return response.content
+
+    async def _aresolve_refresh_source(self, content: Content) -> tuple:
+        """Async version of _resolve_refresh_source.
+
+        Priority:
+        1. Original cloud source (if _agno.source_type exists) — try first
+        2. Backup storage (if _agno.backup_storage_type exists) — fallback
+
+        Returns:
+            Tuple of (file_bytes, filename)
+        """
+        agno_meta = (content.metadata or {}).get(self.RESERVED_METADATA_KEY, {})
+        if not isinstance(agno_meta, dict):
+            agno_meta = {}
+
+        filename = content.name or "content"
+
+        # Priority 1: Original source
+        source_type = agno_meta.get("source_type")
+        if source_type:
+            try:
+                if source_type == "url":
+                    file_bytes = await self._afetch_url_for_refresh(agno_meta)
+                    return file_bytes, filename
+                storage = self._get_backup_storage_for_refresh(agno_meta)
+                file_bytes = await storage.afetch_from_source(agno_meta)
+                return file_bytes, filename
+            except Exception as e:
+                log_warning(f"Failed to fetch from original source, trying backup storage: {e}")
+
+        # Priority 2: Backup storage
+        backup_storage_type = agno_meta.get("backup_storage_type")
+        if backup_storage_type:
+            storage = self._get_backup_storage_for_refresh(agno_meta)
+            file_bytes = await storage.afetch(agno_meta)
+            return file_bytes, filename
+
+        # Also check top-level metadata for backward compatibility
+        if content.metadata:
+            source_type = content.metadata.get("source_type")
+            if source_type:
+                try:
+                    if source_type == "url":
+                        file_bytes = await self._afetch_url_for_refresh(content.metadata)
+                        return file_bytes, filename
+                    storage = self._get_backup_storage_for_refresh(content.metadata)
+                    file_bytes = await storage.afetch_from_source(content.metadata)
+                    return file_bytes, filename
+                except Exception as e:
+                    log_warning(f"Failed to fetch from original source (compat): {e}")
+
+        raise ValueError("Cannot refresh: no backup storage or original source available")
+
+    async def _afetch_url_for_refresh(self, metadata: Dict[str, Any]) -> bytes:
+        """Async version of _fetch_url_for_refresh. Uses httpx AsyncClient."""
+        source_url = metadata.get("source_url")
+        if not source_url:
+            raise ValueError("Cannot refresh URL content: no source_url in metadata")
+
+        response = await async_fetch_with_retry(source_url)
         return response.content
 
     # ==========================================
@@ -1299,7 +1360,7 @@ class Knowledge(RemoteKnowledge):
         backup: Optional[bool] = None,
     ) -> None:
         # Store backup content if applicable
-        self._determine_backup(content, backup)
+        await self._adetermine_backup(content, backup)
         # Capture reader and chunking config in _agno metadata
         self._store_processing_config(content)
 
@@ -1375,6 +1436,68 @@ class Knowledge(RemoteKnowledge):
         content_id = content.id or generate_id(content.content_hash or "")
         try:
             storage_meta = self.backup_storage.store(content_id, filename, file_bytes)
+            if content.metadata is None:
+                content.metadata = {}
+            for key, value in storage_meta.items():
+                content.metadata = self._set_agno_metadata(content.metadata, key, value)
+        except Exception as e:
+            log_error(f"Failed to store backup content: {e}")
+
+    async def _adetermine_backup(self, content: Content, backup: Optional[bool] = None) -> None:
+        """Async version of _determine_backup.
+
+        Args:
+            content: Content with file_data to store
+            backup: None=auto (store if backup_storage_config set), True=force, False=skip
+        """
+        should_store = backup if backup is not None else (self.backup_storage is not None)
+        if not should_store:
+            return
+
+        if backup is True and self.backup_storage is None:
+            log_warning("backup=True but no backup_storage_config set on Knowledge")
+            return
+
+        if self.backup_storage is None:
+            return
+
+        file_bytes = self._extract_file_bytes(content)
+        if file_bytes is None:
+            return
+
+        filename = "content"
+        if content.file_data and isinstance(content.file_data, FileData) and content.file_data.filename:
+            filename = content.file_data.filename
+        elif content.name:
+            filename = content.name
+        elif content.path:
+            filename = basename(content.path)
+
+        content_id = content.id or generate_id(content.content_hash or "")
+
+        try:
+            storage_meta = await self.backup_storage.astore(content_id, filename, file_bytes)
+            if content.metadata is None:
+                content.metadata = {}
+            for key, value in storage_meta.items():
+                content.metadata = self._set_agno_metadata(content.metadata, key, value)
+        except Exception as e:
+            log_error(f"Failed to store backup content: {e}")
+
+    async def _abackup_bytes(
+        self, content: Content, file_bytes: bytes, filename: str, backup: Optional[bool] = None
+    ) -> None:
+        """Async version of _backup_bytes.
+
+        Called by async remote content loaders after fetching bytes from cloud sources.
+        """
+        should_store = backup if backup is not None else (self.backup_storage is not None)
+        if not should_store or self.backup_storage is None:
+            return
+
+        content_id = content.id or generate_id(content.content_hash or "")
+        try:
+            storage_meta = await self.backup_storage.astore(content_id, filename, file_bytes)
             if content.metadata is None:
                 content.metadata = {}
             for key, value in storage_meta.items():

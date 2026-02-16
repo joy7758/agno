@@ -317,7 +317,7 @@ class SharePointLoader(BaseLoader):
                 continue
 
             # Store backup copy if configured
-            self._backup_bytes(content_entry, file_content.getvalue(), file_name, backup)
+            await self._abackup_bytes(content_entry, file_content.getvalue(), file_name, backup)
 
             # Read the content
             read_documents = await reader.async_read(file_content, name=file_name)

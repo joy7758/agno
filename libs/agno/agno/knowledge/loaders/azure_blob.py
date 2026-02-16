@@ -262,7 +262,7 @@ class AzureBlobLoader(BaseLoader):
                     continue
 
                 # Store backup copy if configured
-                self._backup_bytes(content_entry, blob_data, file_name, backup)
+                await self._abackup_bytes(content_entry, blob_data, file_name, backup)
 
                 # Select reader and read content
                 reader = self._select_reader_by_uri(file_name, content.reader)
