@@ -482,9 +482,9 @@ class TestRouterUserSelection:
         response = workflow.run(input="test data")
 
         assert response.is_paused is True
-        assert response.router_requirements is not None
-        assert len(response.router_requirements) == 1
-        assert response.router_requirements[0].available_choices == ["route_a", "route_b"]
+        assert response.steps_requiring_route_selection is not None
+        assert len(response.steps_requiring_route_selection) == 1
+        assert response.steps_requiring_route_selection[0].available_choices == ["route_a", "route_b"]
 
     def test_router_user_selection_continue(self, shared_db):
         """Test workflow continues after router selection."""
@@ -510,7 +510,7 @@ class TestRouterUserSelection:
         assert response.is_paused is True
 
         # Select a route
-        response.router_requirements[0].select("route_a")
+        response.steps_requiring_route_selection[0].select("route_a")
 
         # Continue the workflow
         final_response = workflow.continue_run(response)
@@ -544,10 +544,10 @@ class TestRouterUserSelection:
         # Run until pause
         response = workflow.run(input="test data")
         assert response.is_paused is True
-        assert response.router_requirements[0].allow_multiple_selections is True
+        assert response.steps_requiring_route_selection[0].allow_multiple_selections is True
 
         # Select multiple routes
-        response.router_requirements[0].select_multiple(["route_a", "route_c"])
+        response.steps_requiring_route_selection[0].select_multiple(["route_a", "route_c"])
 
         # Continue the workflow
         final_response = workflow.continue_run(response)
@@ -579,7 +579,7 @@ class TestRouterUserSelection:
         assert response.is_paused is True
 
         # Select a route
-        response.router_requirements[0].select("route_b")
+        response.steps_requiring_route_selection[0].select("route_b")
 
         # Continue the workflow
         final_response = await workflow.acontinue_run(response)
@@ -624,10 +624,10 @@ class TestRouterUserSelection:
         assert session is not None
         response = session.runs[-1]
         assert response.is_paused is True
-        assert response.router_requirements is not None
+        assert response.steps_requiring_route_selection is not None
 
         # Select a route
-        response.router_requirements[0].select("route_a")
+        response.steps_requiring_route_selection[0].select("route_a")
 
         # Continue with streaming - stream_events=True for step events
         continue_events = list(workflow.continue_run(response, stream=True, stream_events=True))
@@ -1131,7 +1131,7 @@ class TestStepImmutability:
         assert run1.is_paused is True
 
         # Select and continue
-        run1.router_requirements[0].select("option_a")
+        run1.steps_requiring_route_selection[0].select("option_a")
         result1 = workflow.continue_run(run1)
         assert result1.status == RunStatus.completed
 
@@ -1165,7 +1165,7 @@ class TestStepImmutability:
         run1 = workflow.run(input="first run")
         assert run1.is_paused is True
 
-        run1.router_requirements[0].select("option_a")
+        run1.steps_requiring_route_selection[0].select("option_a")
         result1 = workflow.continue_run(run1)
         assert result1.status == RunStatus.completed
 
@@ -1176,10 +1176,10 @@ class TestStepImmutability:
         assert run2.is_paused is True, (
             "Second run should pause at router! If this fails, Router.requires_user_input was mutated."
         )
-        assert len(run2.router_requirements) == 1
+        assert len(run2.steps_requiring_route_selection) == 1
 
         # Complete second run
-        run2.router_requirements[0].select("option_b")
+        run2.steps_requiring_route_selection[0].select("option_b")
         result2 = workflow.continue_run(run2)
         assert result2.status == RunStatus.completed
 

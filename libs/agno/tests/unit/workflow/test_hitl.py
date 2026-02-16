@@ -8,7 +8,7 @@ Tests cover:
 - Error handling with on_error="pause"
 - Step rejection with on_reject="skip"
 - Workflow pause and resume via continue_run()
-- StepRequirement, RouterRequirement, ErrorRequirement dataclasses
+- StepRequirement (including route selection), ErrorRequirement dataclasses
 - Serialization/deserialization of HITL requirements
 """
 
@@ -17,7 +17,6 @@ from agno.run.workflow import WorkflowRunOutput
 from agno.workflow.step import Step
 from agno.workflow.types import (
     ErrorRequirement,
-    RouterRequirement,
     StepInput,
     StepOutput,
     StepRequirement,
@@ -214,44 +213,51 @@ class TestStepRequirement:
 
 
 # =============================================================================
-# RouterRequirement Tests
+# StepRequirement Route Selection Tests (formerly RouterRequirement)
 # =============================================================================
 
 
-class TestRouterRequirement:
-    """Tests for RouterRequirement dataclass."""
+class TestStepRequirementRouteSelection:
+    """Tests for StepRequirement with route selection fields."""
 
-    def test_router_requirement_creation(self):
-        """Test creating a RouterRequirement."""
-        req = RouterRequirement(
-            router_id="router-1",
-            router_name="test_router",
+    def test_route_selection_requirement_creation(self):
+        """Test creating a StepRequirement for route selection."""
+        req = StepRequirement(
+            step_id="router-1",
+            step_name="test_router",
+            step_type="Router",
+            requires_route_selection=True,
             available_choices=["option_a", "option_b", "option_c"],
             user_input_message="Select a route",
         )
 
-        assert req.router_id == "router-1"
-        assert req.router_name == "test_router"
+        assert req.step_id == "router-1"
+        assert req.step_name == "test_router"
+        assert req.requires_route_selection is True
         assert req.available_choices == ["option_a", "option_b", "option_c"]
         assert req.selected_choices is None
         assert req.allow_multiple_selections is False
 
-    def test_router_requirement_select_single(self):
+    def test_route_selection_select_single(self):
         """Test selecting a single route."""
-        req = RouterRequirement(
-            router_id="router-1",
-            router_name="test_router",
+        req = StepRequirement(
+            step_id="router-1",
+            step_name="test_router",
+            step_type="Router",
+            requires_route_selection=True,
             available_choices=["option_a", "option_b"],
         )
 
         req.select("option_a")
         assert req.selected_choices == ["option_a"]
 
-    def test_router_requirement_select_multiple(self):
+    def test_route_selection_select_multiple(self):
         """Test selecting multiple routes."""
-        req = RouterRequirement(
-            router_id="router-1",
-            router_name="test_router",
+        req = StepRequirement(
+            step_id="router-1",
+            step_name="test_router",
+            step_type="Router",
+            requires_route_selection=True,
             available_choices=["option_a", "option_b", "option_c"],
             allow_multiple_selections=True,
         )
@@ -259,11 +265,13 @@ class TestRouterRequirement:
         req.select_multiple(["option_a", "option_c"])
         assert req.selected_choices == ["option_a", "option_c"]
 
-    def test_router_requirement_to_dict(self):
-        """Test serializing RouterRequirement to dict."""
-        req = RouterRequirement(
-            router_id="router-1",
-            router_name="test_router",
+    def test_route_selection_to_dict(self):
+        """Test serializing route selection StepRequirement to dict."""
+        req = StepRequirement(
+            step_id="router-1",
+            step_name="test_router",
+            step_type="Router",
+            requires_route_selection=True,
             available_choices=["option_a", "option_b"],
             allow_multiple_selections=True,
         )
@@ -271,25 +279,28 @@ class TestRouterRequirement:
 
         data = req.to_dict()
 
-        assert data["router_id"] == "router-1"
-        assert data["router_name"] == "test_router"
+        assert data["step_id"] == "router-1"
+        assert data["step_name"] == "test_router"
         assert data["available_choices"] == ["option_a", "option_b"]
         assert data["selected_choices"] == ["option_a", "option_b"]
         assert data["allow_multiple_selections"] is True
 
-    def test_router_requirement_from_dict(self):
-        """Test deserializing RouterRequirement from dict."""
+    def test_route_selection_from_dict(self):
+        """Test deserializing route selection StepRequirement from dict."""
         data = {
-            "router_id": "router-1",
-            "router_name": "test_router",
+            "step_id": "router-1",
+            "step_name": "test_router",
+            "step_type": "Router",
+            "requires_route_selection": True,
             "available_choices": ["option_a", "option_b"],
             "selected_choices": ["option_a"],
             "allow_multiple_selections": False,
         }
 
-        req = RouterRequirement.from_dict(data)
+        req = StepRequirement.from_dict(data)
 
-        assert req.router_id == "router-1"
+        assert req.step_id == "router-1"
+        assert req.requires_route_selection is True
         assert req.selected_choices == ["option_a"]
 
 
@@ -540,10 +551,12 @@ class TestWorkflowRunOutputHITL:
         assert output.step_requirements[0].step_id == "step-1"
 
     def test_workflow_output_router_requirements(self):
-        """Test router_requirements handling."""
-        req = RouterRequirement(
-            router_id="router-1",
-            router_name="test_router",
+        """Test router_requirements handling (now via step_requirements with requires_route_selection)."""
+        req = StepRequirement(
+            step_id="router-1",
+            step_name="test_router",
+            step_type="Router",
+            requires_route_selection=True,
             available_choices=["a", "b"],
         )
 
@@ -552,11 +565,11 @@ class TestWorkflowRunOutputHITL:
             session_id="session-1",
             workflow_name="test_workflow",
             status=RunStatus.paused,
-            router_requirements=[req],
+            step_requirements=[req],
         )
 
-        assert len(output.router_requirements) == 1
-        assert output.router_requirements[0].router_id == "router-1"
+        assert len(output.step_requirements) == 1
+        assert output.step_requirements[0].step_id == "router-1"
 
     def test_workflow_output_error_requirements(self):
         """Test error_requirements handling."""
