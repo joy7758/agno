@@ -137,6 +137,7 @@ class GitHubLoader(BaseLoader):
         upsert: bool,
         skip_if_exists: bool,
         config: Optional[BaseStorageConfig] = None,
+        backup: Optional[bool] = None,
     ):
         """Load content from GitHub (async).
 
@@ -263,6 +264,8 @@ class GitHubLoader(BaseLoader):
                     await self._aupdate_content(content_entry)
                     continue
 
+                await self._abackup_bytes(content_entry, file_content, file_name, backup)
+
                 reader = cast(Reader, reader)
                 readable_content = BytesIO(file_content)
                 read_documents = await reader.async_read(readable_content, name=file_name)
@@ -279,6 +282,7 @@ class GitHubLoader(BaseLoader):
         upsert: bool,
         skip_if_exists: bool,
         config: Optional[BaseStorageConfig] = None,
+        backup: Optional[bool] = None,
     ):
         """Load content from GitHub (sync).
 
@@ -404,6 +408,8 @@ class GitHubLoader(BaseLoader):
                     content_entry.status_message = "No suitable reader found"
                     self._update_content(content_entry)
                     continue
+
+                self._backup_bytes(content_entry, file_content, file_name, backup)
 
                 reader = cast(Reader, reader)
                 readable_content = BytesIO(file_content)
