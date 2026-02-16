@@ -2780,22 +2780,31 @@ class Knowledge(RemoteKnowledge):
         existing_metadata: Optional[Dict[str, Any]],
         new_metadata: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Merge user-provided metadata while preserving the reserved _agno key.
+        """Merge metadata while deep-merging the reserved _agno key.
 
         The _agno key contains system-managed fields (source tracking, backup storage info).
-        User-provided _agno values are silently ignored to prevent accidental overwrites.
+        Both existing and new _agno values are merged so that system code can add keys
+        (e.g. backup_storage_type added after initial insert) without losing earlier keys.
         """
-        # Preserve existing _agno data
-        agno_data = None
+        existing_agno: Optional[Dict[str, Any]] = None
         if existing_metadata and Knowledge.RESERVED_METADATA_KEY in existing_metadata:
-            agno_data = existing_metadata[Knowledge.RESERVED_METADATA_KEY]
+            existing_agno = existing_metadata[Knowledge.RESERVED_METADATA_KEY]
 
-        # Start with new metadata, strip any user-provided _agno
+        new_agno: Optional[Dict[str, Any]] = None
+        if Knowledge.RESERVED_METADATA_KEY in new_metadata:
+            val = new_metadata[Knowledge.RESERVED_METADATA_KEY]
+            if isinstance(val, dict):
+                new_agno = val
+
+        # Start with new metadata, strip _agno (will be re-added after merge)
         merged = {k: v for k, v in new_metadata.items() if k != Knowledge.RESERVED_METADATA_KEY}
 
-        # Restore the system _agno data
-        if agno_data is not None:
-            merged[Knowledge.RESERVED_METADATA_KEY] = agno_data
+        # Deep-merge _agno: existing keys preserved, new keys added/updated
+        if existing_agno is not None or new_agno is not None:
+            merged_agno = dict(existing_agno) if existing_agno else {}
+            if new_agno:
+                merged_agno.update(new_agno)
+            merged[Knowledge.RESERVED_METADATA_KEY] = merged_agno
 
         return merged
 
