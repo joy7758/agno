@@ -214,12 +214,13 @@ class DynamoDb(BaseDb):
 
     # --- Sessions ---
 
-    def delete_session(self, session_id: Optional[str] = None) -> bool:
+    def delete_session(self, session_id: Optional[str] = None, user_id: Optional[str] = None) -> bool:
         """
         Delete a session from the database.
 
         Args:
             session_id: The ID of the session to delete.
+            user_id (Optional[str]): User ID to filter by. Defaults to None.
 
         Raises:
             Exception: If any error occurs while deleting the session.
@@ -228,22 +229,31 @@ class DynamoDb(BaseDb):
             return False
 
         try:
-            self.client.delete_item(
-                TableName=self.session_table_name,
-                Key={"session_id": {"S": session_id}},
-            )
+            kwargs: Dict[str, Any] = {
+                "TableName": self.session_table_name,
+                "Key": {"session_id": {"S": session_id}},
+            }
+            if user_id is not None:
+                kwargs["ConditionExpression"] = "user_id = :user_id"
+                kwargs["ExpressionAttributeValues"] = {":user_id": {"S": user_id}}
+            self.client.delete_item(**kwargs)
             return True
+
+        except self.client.exceptions.ConditionalCheckFailedException:
+            log_debug(f"No session found to delete with session_id: {session_id} and user_id: {user_id}")
+            return False
 
         except Exception as e:
             log_error(f"Failed to delete session {session_id}: {e}")
             raise e
 
-    def delete_sessions(self, session_ids: List[str]) -> None:
+    def delete_sessions(self, session_ids: List[str], user_id: Optional[str] = None) -> None:
         """
         Delete sessions from the database in batches.
 
         Args:
             session_ids: List of session IDs to delete
+            user_id (Optional[str]): User ID to filter by. Defaults to None.
 
         Raises:
             Exception: If any error occurs while deleting the sessions.
@@ -252,16 +262,27 @@ class DynamoDb(BaseDb):
             return
 
         try:
-            # Process the items to delete in batches of the max allowed size or less
-            for i in range(0, len(session_ids), DYNAMO_BATCH_SIZE_LIMIT):
-                batch = session_ids[i : i + DYNAMO_BATCH_SIZE_LIMIT]
-                delete_requests = []
+            if user_id is not None:
+                for session_id in session_ids:
+                    try:
+                        self.client.delete_item(
+                            TableName=self.session_table_name,
+                            Key={"session_id": {"S": session_id}},
+                            ConditionExpression="user_id = :user_id",
+                            ExpressionAttributeValues={":user_id": {"S": user_id}},
+                        )
+                    except self.client.exceptions.ConditionalCheckFailedException:
+                        pass
+            else:
+                for i in range(0, len(session_ids), DYNAMO_BATCH_SIZE_LIMIT):
+                    batch = session_ids[i : i + DYNAMO_BATCH_SIZE_LIMIT]
+                    delete_requests = []
 
-                for session_id in batch:
-                    delete_requests.append({"DeleteRequest": {"Key": {"session_id": {"S": session_id}}}})
+                    for session_id in batch:
+                        delete_requests.append({"DeleteRequest": {"Key": {"session_id": {"S": session_id}}}})
 
-                if delete_requests:
-                    self.client.batch_write_item(RequestItems={self.session_table_name: delete_requests})
+                    if delete_requests:
+                        self.client.batch_write_item(RequestItems={self.session_table_name: delete_requests})
 
         except Exception as e:
             log_error(f"Failed to delete sessions: {e}")
@@ -302,7 +323,7 @@ class DynamoDb(BaseDb):
 
             session = deserialize_from_dynamodb_item(item)
 
-            if user_id and session.get("user_id") != user_id:
+            if user_id is not None and session.get("user_id") != user_id:
                 return None
 
             if not session:
@@ -348,7 +369,7 @@ class DynamoDb(BaseDb):
             expression_attribute_names = {}
             expression_attribute_values = {":session_type": {"S": session_type.value}}
 
-            if user_id:
+            if user_id is not None:
                 filter_expression = "#user_id = :user_id"
                 expression_attribute_names["#user_id"] = "user_id"
                 expression_attribute_values[":user_id"] = {"S": user_id}
@@ -449,6 +470,7 @@ class DynamoDb(BaseDb):
         session_id: str,
         session_type: SessionType,
         session_name: str,
+        user_id: Optional[str] = None,
         deserialize: Optional[bool] = True,
     ) -> Optional[Union[Session, Dict[str, Any]]]:
         """
@@ -458,6 +480,7 @@ class DynamoDb(BaseDb):
             session_id: The ID of the session to rename.
             session_type: The type of session to rename.
             session_name: The new name for the session.
+            user_id (Optional[str]): User ID to filter by. Defaults to None.
 
         Returns:
             Optional[Session]: The renamed session if successful, None otherwise.
@@ -478,19 +501,30 @@ class DynamoDb(BaseDb):
             if not current_item:
                 return None
 
+            # Verify user_id if provided
+            if user_id is not None:
+                item_data = deserialize_from_dynamodb_item(current_item)
+                if item_data.get("user_id") != user_id:
+                    return None
+
             # Update session_data with the new session_name
             session_data = deserialize_from_dynamodb_item(current_item).get("session_data", {})
             session_data["session_name"] = session_name
+            condition_expr = "session_type = :session_type"
+            attr_values: Dict[str, Any] = {
+                ":session_data": {"S": json.dumps(session_data)},
+                ":session_type": {"S": session_type.value},
+                ":updated_at": {"N": str(int(time.time()))},
+            }
+            if user_id is not None:
+                condition_expr += " AND user_id = :user_id"
+                attr_values[":user_id"] = {"S": user_id}
             response = self.client.update_item(
                 TableName=self.session_table_name,
                 Key={"session_id": {"S": session_id}},
                 UpdateExpression="SET session_data = :session_data, updated_at = :updated_at",
-                ConditionExpression="session_type = :session_type",
-                ExpressionAttributeValues={
-                    ":session_data": {"S": json.dumps(session_data)},
-                    ":session_type": {"S": session_type.value},
-                    ":updated_at": {"N": str(int(time.time()))},
-                },
+                ConditionExpression=condition_expr,
+                ExpressionAttributeValues=attr_values,
                 ReturnValues="ALL_NEW",
             )
             item = response.get("Attributes")
@@ -536,6 +570,11 @@ class DynamoDb(BaseDb):
             response = self.client.get_item(TableName=table_name, Key={"session_id": {"S": session.session_id}})
             existing_item = response.get("Item")
 
+            if existing_item:
+                existing_uid = existing_item.get("user_id", {}).get("S")
+                if existing_uid is not None and existing_uid != session.user_id:
+                    return None
+
             # Prepare the session to upsert, merging with existing session if it exists.
             serialized_session = prepare_session_data(session)
             if existing_item:
@@ -544,9 +583,23 @@ class DynamoDb(BaseDb):
             else:
                 serialized_session["updated_at"] = serialized_session["created_at"]
 
-            # Upsert
             item = serialize_to_dynamo_item(serialized_session)
-            self.client.put_item(TableName=table_name, Item=item)
+            put_kwargs: Dict[str, Any] = {"TableName": table_name, "Item": item}
+
+            expr_names = {"#uid": "user_id"}
+            if session.user_id is not None:
+                put_kwargs["ConditionExpression"] = (
+                    "attribute_not_exists(session_id) OR #uid = :incoming_uid OR attribute_not_exists(#uid)"
+                )
+                put_kwargs["ExpressionAttributeValues"] = {":incoming_uid": {"S": session.user_id}}
+            else:
+                put_kwargs["ConditionExpression"] = "attribute_not_exists(session_id) OR attribute_not_exists(#uid)"
+            put_kwargs["ExpressionAttributeNames"] = expr_names
+
+            try:
+                self.client.put_item(**put_kwargs)
+            except self.client.exceptions.ConditionalCheckFailedException:
+                return None
 
             return deserialize_session_result(serialized_session, session, deserialize)
 
@@ -606,7 +659,7 @@ class DynamoDb(BaseDb):
         """
         try:
             # If user_id is provided, verify the memory belongs to the user before deleting
-            if user_id:
+            if user_id is not None:
                 response = self.client.get_item(
                     TableName=self.memory_table_name,
                     Key={"memory_id": {"S": memory_id}},
@@ -642,7 +695,7 @@ class DynamoDb(BaseDb):
 
         try:
             # If user_id is provided, filter memory_ids to only those belonging to the user
-            if user_id:
+            if user_id is not None:
                 filtered_memory_ids = []
                 for memory_id in memory_ids:
                     response = self.client.get_item(
@@ -812,7 +865,7 @@ class DynamoDb(BaseDb):
                 filter_expression = f"{filter_expression} AND {search_filter}" if filter_expression else search_filter
 
             # Determine whether to use GSI query or table scan
-            if user_id:
+            if user_id is not None:
                 # Use GSI query when user_id is provided
                 key_condition_expression = "#user_id = :user_id"
 
@@ -906,7 +959,7 @@ class DynamoDb(BaseDb):
             # Build filter expression for user_id if provided
             filter_expression = None
             expression_attribute_values = {}
-            if user_id:
+            if user_id is not None:
                 filter_expression = "user_id = :user_id"
                 expression_attribute_values[":user_id"] = {"S": user_id}
 
@@ -955,7 +1008,7 @@ class DynamoDb(BaseDb):
             # Convert to list and apply sorting
             stats_list = list(user_stats.values())
             stats_list.sort(
-                key=lambda x: (x["last_memory_updated_at"] if x["last_memory_updated_at"] is not None else 0),
+                key=lambda x: x["last_memory_updated_at"] if x["last_memory_updated_at"] is not None else 0,
                 reverse=True,
             )
 
@@ -1628,6 +1681,7 @@ class DynamoDb(BaseDb):
         page: Optional[int] = None,
         sort_by: Optional[str] = None,
         sort_order: Optional[str] = None,
+        linked_to: Optional[str] = None,
     ) -> Tuple[List[KnowledgeRow], int]:
         """Get all knowledge contents from the database.
 
@@ -1636,7 +1690,7 @@ class DynamoDb(BaseDb):
             page (Optional[int]): The page number.
             sort_by (Optional[str]): The column to sort by.
             sort_order (Optional[str]): The order to sort by.
-            create_table_if_not_found (Optional[bool]): Whether to create the table if it doesn't exist.
+            linked_to (Optional[str]): Filter by linked_to value (knowledge instance name).
 
         Returns:
             Tuple[List[KnowledgeRow], int]: The knowledge contents and total count.
@@ -1668,6 +1722,10 @@ class DynamoDb(BaseDb):
                     knowledge_rows.append(knowledge_row)
                 except Exception as e:
                     log_error(f"Failed to deserialize knowledge row: {e}")
+
+            # Apply linked_to filter if provided
+            if linked_to is not None:
+                knowledge_rows = [row for row in knowledge_rows if row.linked_to == linked_to]
 
             # Apply sorting
             if sort_by:
@@ -2309,7 +2367,7 @@ class DynamoDb(BaseDb):
                 gsi_name = "session_id-start_time-index"
                 key_condition = "session_id = :session_id"
                 key_values[":session_id"] = {"S": session_id}
-            elif user_id:
+            elif user_id is not None:
                 use_gsi = True
                 gsi_name = "user_id-start_time-index"
                 key_condition = "user_id = :user_id"
@@ -2465,7 +2523,7 @@ class DynamoDb(BaseDb):
             filter_parts = []
             filter_values: Dict[str, Any] = {}
 
-            if user_id:
+            if user_id is not None:
                 filter_parts.append("user_id = :user_id")
                 filter_values[":user_id"] = {"S": user_id}
             if agent_id:

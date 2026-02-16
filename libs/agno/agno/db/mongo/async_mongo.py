@@ -4,6 +4,11 @@ from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from uuid import uuid4
 
+try:
+    from pymongo.errors import DuplicateKeyError
+except ImportError:
+    DuplicateKeyError = Exception  # type: ignore[assignment,misc]
+
 if TYPE_CHECKING:
     from agno.tracing.schemas import Span, Trace
 
@@ -526,11 +531,12 @@ class AsyncMongoDb(AsyncBaseDb):
 
     # -- Session methods --
 
-    async def delete_session(self, session_id: str) -> bool:
+    async def delete_session(self, session_id: str, user_id: Optional[str] = None) -> bool:
         """Delete a session from the database.
 
         Args:
             session_id (str): The ID of the session to delete.
+            user_id (Optional[str]): User ID to filter by. Defaults to None.
 
         Returns:
             bool: True if the session was deleted, False otherwise.
@@ -543,7 +549,10 @@ class AsyncMongoDb(AsyncBaseDb):
             if collection is None:
                 return False
 
-            result = await collection.delete_one({"session_id": session_id})
+            query: Dict[str, Any] = {"session_id": session_id}
+            if user_id is not None:
+                query["user_id"] = user_id
+            result = await collection.delete_one(query)
             if result.deleted_count == 0:
                 log_debug(f"No session found to delete with session_id: {session_id}")
                 return False
@@ -555,18 +564,22 @@ class AsyncMongoDb(AsyncBaseDb):
             log_error(f"Error deleting session: {e}")
             raise e
 
-    async def delete_sessions(self, session_ids: List[str]) -> None:
+    async def delete_sessions(self, session_ids: List[str], user_id: Optional[str] = None) -> None:
         """Delete multiple sessions from the database.
 
         Args:
             session_ids (List[str]): The IDs of the sessions to delete.
+            user_id (Optional[str]): User ID to filter by. Defaults to None.
         """
         try:
             collection = await self._get_collection(table_type="sessions")
             if collection is None:
                 return
 
-            result = await collection.delete_many({"session_id": {"$in": session_ids}})
+            query: Dict[str, Any] = {"session_id": {"$in": session_ids}}
+            if user_id is not None:
+                query["user_id"] = user_id
+            result = await collection.delete_many(query)
             log_debug(f"Successfully deleted {result.deleted_count} sessions")
 
         except Exception as e:
@@ -740,7 +753,12 @@ class AsyncMongoDb(AsyncBaseDb):
             raise e
 
     async def rename_session(
-        self, session_id: str, session_type: SessionType, session_name: str, deserialize: Optional[bool] = True
+        self,
+        session_id: str,
+        session_type: SessionType,
+        session_name: str,
+        user_id: Optional[str] = None,
+        deserialize: Optional[bool] = True,
     ) -> Optional[Union[Session, Dict[str, Any]]]:
         """Rename a session in the database.
 
@@ -748,6 +766,7 @@ class AsyncMongoDb(AsyncBaseDb):
             session_id (str): The ID of the session to rename.
             session_type (SessionType): The type of session to rename.
             session_name (str): The new name of the session.
+            user_id (Optional[str]): User ID to filter by. Defaults to None.
             deserialize (Optional[bool]): Whether to serialize the session. Defaults to True.
 
         Returns:
@@ -763,9 +782,12 @@ class AsyncMongoDb(AsyncBaseDb):
             if collection is None:
                 return None
 
+            query: Dict[str, Any] = {"session_id": session_id}
+            if user_id is not None:
+                query["user_id"] = user_id
             try:
                 result = await collection.find_one_and_update(
-                    {"session_id": session_id},
+                    query,
                     {"$set": {"session_data.session_name": session_name, "updated_at": int(time.time())}},
                     return_document=ReturnDocument.AFTER,
                     upsert=False,
@@ -773,7 +795,7 @@ class AsyncMongoDb(AsyncBaseDb):
             except OperationFailure:
                 # If the update fails because session_data doesn't contain a session_name yet, we initialize session_data
                 result = await collection.find_one_and_update(
-                    {"session_id": session_id},
+                    query,
                     {"$set": {"session_data": {"session_name": session_name}, "updated_at": int(time.time())}},
                     return_document=ReturnDocument.AFTER,
                     upsert=False,
@@ -819,6 +841,19 @@ class AsyncMongoDb(AsyncBaseDb):
 
             session_dict = session.to_dict()
 
+            existing = await collection.find_one({"session_id": session_dict.get("session_id")}, {"user_id": 1})
+            if existing:
+                existing_uid = existing.get("user_id")
+                if existing_uid is not None and existing_uid != session_dict.get("user_id"):
+                    return None
+
+            incoming_uid = session_dict.get("user_id")
+            upsert_filter: Dict[str, Any] = {"session_id": session_dict.get("session_id")}
+            if incoming_uid is not None:
+                upsert_filter["$or"] = [{"user_id": incoming_uid}, {"user_id": None}, {"user_id": {"$exists": False}}]
+            else:
+                upsert_filter["$or"] = [{"user_id": None}, {"user_id": {"$exists": False}}]
+
             if isinstance(session, AgentSession):
                 record = {
                     "session_id": session_dict.get("session_id"),
@@ -834,12 +869,15 @@ class AsyncMongoDb(AsyncBaseDb):
                     "updated_at": int(time.time()),
                 }
 
-                result = await collection.find_one_and_replace(
-                    filter={"session_id": session_dict.get("session_id")},
-                    replacement=record,
-                    upsert=True,
-                    return_document=ReturnDocument.AFTER,
-                )
+                try:
+                    result = await collection.find_one_and_replace(
+                        filter=upsert_filter,
+                        replacement=record,
+                        upsert=True,
+                        return_document=ReturnDocument.AFTER,
+                    )
+                except DuplicateKeyError:
+                    return None
                 if not result:
                     return None
 
@@ -865,12 +903,15 @@ class AsyncMongoDb(AsyncBaseDb):
                     "updated_at": int(time.time()),
                 }
 
-                result = await collection.find_one_and_replace(
-                    filter={"session_id": session_dict.get("session_id")},
-                    replacement=record,
-                    upsert=True,
-                    return_document=ReturnDocument.AFTER,
-                )
+                try:
+                    result = await collection.find_one_and_replace(
+                        filter=upsert_filter,
+                        replacement=record,
+                        upsert=True,
+                        return_document=ReturnDocument.AFTER,
+                    )
+                except DuplicateKeyError:
+                    return None
                 if not result:
                     return None
 
@@ -897,12 +938,15 @@ class AsyncMongoDb(AsyncBaseDb):
                     "updated_at": int(time.time()),
                 }
 
-                result = await collection.find_one_and_replace(
-                    filter={"session_id": session_dict.get("session_id")},
-                    replacement=record,
-                    upsert=True,
-                    return_document=ReturnDocument.AFTER,
-                )
+                try:
+                    result = await collection.find_one_and_replace(
+                        filter=upsert_filter,
+                        replacement=record,
+                        upsert=True,
+                        return_document=ReturnDocument.AFTER,
+                    )
+                except DuplicateKeyError:
+                    return None
                 if not result:
                     return None
 
@@ -1915,6 +1959,7 @@ class AsyncMongoDb(AsyncBaseDb):
         page: Optional[int] = None,
         sort_by: Optional[str] = None,
         sort_order: Optional[str] = None,
+        linked_to: Optional[str] = None,
     ) -> Tuple[List[KnowledgeRow], int]:
         """Get all knowledge contents from the database.
 
@@ -1923,6 +1968,7 @@ class AsyncMongoDb(AsyncBaseDb):
             page (Optional[int]): The page number.
             sort_by (Optional[str]): The column to sort by.
             sort_order (Optional[str]): The order to sort by.
+            linked_to (Optional[str]): Filter by linked_to value (knowledge instance name).
 
         Returns:
             Tuple[List[KnowledgeRow], int]: The knowledge contents and total count.
@@ -1936,6 +1982,10 @@ class AsyncMongoDb(AsyncBaseDb):
                 return [], 0
 
             query: Dict[str, Any] = {}
+
+            # Apply linked_to filter if provided
+            if linked_to is not None:
+                query["linked_to"] = linked_to
 
             # Get total count
             total_count = await collection.count_documents(query)
@@ -2529,7 +2579,7 @@ class AsyncMongoDb(AsyncBaseDb):
                 query["run_id"] = run_id
             if session_id:
                 query["session_id"] = session_id
-            if user_id:
+            if user_id is not None:
                 query["user_id"] = user_id
             if agent_id:
                 query["agent_id"] = agent_id
@@ -2615,7 +2665,7 @@ class AsyncMongoDb(AsyncBaseDb):
 
             # Build match stage
             match_stage: Dict[str, Any] = {"session_id": {"$ne": None}}
-            if user_id:
+            if user_id is not None:
                 match_stage["user_id"] = user_id
             if agent_id:
                 match_stage["agent_id"] = agent_id
