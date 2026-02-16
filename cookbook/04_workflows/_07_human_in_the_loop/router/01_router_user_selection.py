@@ -68,7 +68,11 @@ def deep_analysis(step_input: StepInput) -> StepOutput:
 
 def custom_analysis(step_input: StepInput) -> StepOutput:
     """Perform custom analysis based on user preferences."""
-    user_input = step_input.additional_data.get("user_input", {}) if step_input.additional_data else {}
+    user_input = (
+        step_input.additional_data.get("user_input", {})
+        if step_input.additional_data
+        else {}
+    )
     params = user_input.get("custom_params", "default parameters")
 
     return StepOutput(
@@ -100,9 +104,21 @@ analyze_step = Step(name="analyze_data", executor=analyze_data)
 analysis_router = Router(
     name="analysis_type_router",
     choices=[
-        Step(name="quick_analysis", description="Fast analysis with basic insights (2 min)", executor=quick_analysis),
-        Step(name="deep_analysis", description="Comprehensive analysis with full details (10 min)", executor=deep_analysis),
-        Step(name="custom_analysis", description="Custom analysis with your parameters", executor=custom_analysis),
+        Step(
+            name="quick_analysis",
+            description="Fast analysis with basic insights (2 min)",
+            executor=quick_analysis,
+        ),
+        Step(
+            name="deep_analysis",
+            description="Comprehensive analysis with full details (10 min)",
+            executor=deep_analysis,
+        ),
+        Step(
+            name="custom_analysis",
+            description="Custom analysis with your parameters",
+            executor=custom_analysis,
+        ),
     ],
     requires_user_input=True,
     user_input_message="Select the type of analysis to perform:",
@@ -161,7 +177,9 @@ if __name__ == "__main__":
                 requirement.set_user_input(**user_values)
 
         for requirement in run_output.steps_requiring_confirmation:
-            print(f"\n[HITL] {requirement.step_name}: {requirement.confirmation_message}")
+            print(
+                f"\n[HITL] {requirement.step_name}: {requirement.confirmation_message}"
+            )
             if input("Continue? (yes/no): ").strip().lower() in ("yes", "y"):
                 requirement.confirm()
             else:

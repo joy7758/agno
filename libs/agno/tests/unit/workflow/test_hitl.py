@@ -16,14 +16,13 @@ from agno.run.base import RunStatus
 from agno.run.workflow import WorkflowRunOutput
 from agno.workflow.step import Step
 from agno.workflow.types import (
+    ErrorRequirement,
+    RouterRequirement,
     StepInput,
     StepOutput,
     StepRequirement,
-    RouterRequirement,
-    ErrorRequirement,
     UserInputField,
 )
-
 
 # =============================================================================
 # Test Step Functions

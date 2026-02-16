@@ -14,6 +14,7 @@ Use Case:
 import random
 
 from agno.db.sqlite import SqliteDb
+from agno.workflow import OnError
 from agno.workflow.step import Step
 from agno.workflow.types import StepInput, StepOutput
 from agno.workflow.workflow import Workflow
@@ -57,7 +58,7 @@ workflow = Workflow(
         Step(
             name="fetch_data",
             executor=unreliable_api_call,
-            on_error="pause",  # Pause on error and let user decide
+            on_error=OnError.pause,  # Pause on error and let user decide
         ),
         Step(
             name="process_data",
@@ -92,7 +93,9 @@ def main():
                 print(f"Retry Count: {error_req.retry_count}")
                 print("-" * 40)
 
-                user_choice = input("\nWhat would you like to do? (retry/skip): ").strip().lower()
+                user_choice = (
+                    input("\nWhat would you like to do? (retry/skip): ").strip().lower()
+                )
 
                 if user_choice == "retry":
                     error_req.retry()
@@ -115,7 +118,9 @@ def main():
         print("\nStep Results:")
         for result in run_output.step_results:
             status = "SUCCESS" if result.success else "FAILED/SKIPPED"
-            print(f"  [{result.step_name}] {status}: {result.content[:80] if result.content else 'No content'}...")
+            print(
+                f"  [{result.step_name}] {status}: {result.content[:80] if result.content else 'No content'}..."
+            )
 
 
 if __name__ == "__main__":

@@ -60,9 +60,7 @@ content_agent = Agent(
 def format_output(step_input: StepInput) -> StepOutput:
     """Format the final output."""
     content = step_input.previous_step_content or "No content generated"
-    return StepOutput(
-        content=f"=== GENERATED CONTENT ===\n\n{content}\n\n=== END ==="
-    )
+    return StepOutput(content=f"=== GENERATED CONTENT ===\n\n{content}\n\n=== END ===")
 
 
 # Define workflow with Step-level HITL configuration
@@ -119,7 +117,11 @@ def handle_hitl_pause(run_output: WorkflowRunOutput) -> None:
                 required_marker = "*" if field.required else ""
                 field_desc = f" - {field.description}" if field.description else ""
                 # Show allowed values if specified
-                allowed_hint = f" [{', '.join(str(v) for v in field.allowed_values)}]" if field.allowed_values else ""
+                allowed_hint = (
+                    f" [{', '.join(str(v) for v in field.allowed_values)}]"
+                    if field.allowed_values
+                    else ""
+                )
                 prompt = f"  {field.name}{required_marker} ({field.field_type}){allowed_hint}{field_desc}: "
 
                 value = input(prompt).strip()
@@ -130,7 +132,12 @@ def handle_hitl_pause(run_output: WorkflowRunOutput) -> None:
                     elif field.field_type == "float":
                         user_values[field.name] = float(value)
                     elif field.field_type == "bool":
-                        user_values[field.name] = value.lower() in ("true", "yes", "1", "y")
+                        user_values[field.name] = value.lower() in (
+                            "true",
+                            "yes",
+                            "1",
+                            "y",
+                        )
                     else:
                         user_values[field.name] = value
 
@@ -182,7 +189,11 @@ def run_workflow_streaming(input_text: str) -> WorkflowRunOutput:
             print(f"[EVENT] Step completed: {event.step_name}")
             if event.content:
                 # Show preview of content (truncated)
-                preview = str(event.content)[:100] + "..." if len(str(event.content)) > 100 else str(event.content)
+                preview = (
+                    str(event.content)[:100] + "..."
+                    if len(str(event.content)) > 100
+                    else str(event.content)
+                )
                 print(f"        Content: {preview}")
 
         elif isinstance(event, StepPausedEvent):
@@ -197,7 +208,9 @@ def run_workflow_streaming(input_text: str) -> WorkflowRunOutput:
 
         elif isinstance(event, WorkflowCompletedEvent):
             print("\n[EVENT] Workflow completed!")
-            print(f"        Final content length: {len(str(event.content)) if event.content else 0} chars")
+            print(
+                f"        Final content length: {len(str(event.content)) if event.content else 0} chars"
+            )
 
         # Check if the event contains the workflow run output
         # (some events have a workflow_run_output attribute)
@@ -220,7 +233,9 @@ def run_workflow_streaming(input_text: str) -> WorkflowRunOutput:
         print("\n[INFO] Continuing workflow with streaming...\n")
 
         # Continue with streaming
-        continue_stream = workflow.continue_run(run_output, stream=True, stream_events=True)
+        continue_stream = workflow.continue_run(
+            run_output, stream=True, stream_events=True
+        )
 
         for event in continue_stream:
             if isinstance(event, StepStartedEvent):
@@ -229,7 +244,11 @@ def run_workflow_streaming(input_text: str) -> WorkflowRunOutput:
             elif isinstance(event, StepCompletedEvent):
                 print(f"[EVENT] Step completed: {event.step_name}")
                 if event.content:
-                    preview = str(event.content)[:100] + "..." if len(str(event.content)) > 100 else str(event.content)
+                    preview = (
+                        str(event.content)[:100] + "..."
+                        if len(str(event.content)) > 100
+                        else str(event.content)
+                    )
                     print(f"        Content: {preview}")
 
             elif isinstance(event, StepPausedEvent):

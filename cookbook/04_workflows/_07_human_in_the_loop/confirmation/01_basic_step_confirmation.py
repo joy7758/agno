@@ -4,13 +4,14 @@ Basic Step Confirmation Example
 This example demonstrates how to pause a workflow for user confirmation
 before executing a step. The user can either:
 - Confirm: Step executes and workflow continues
-- Reject with on_reject="cancel" (default): Workflow is cancelled
-- Reject with on_reject="skip": Step is skipped and workflow continues with next step
+- Reject with on_reject=OnReject.cancel (default): Workflow is cancelled
+- Reject with on_reject=OnReject.skip: Step is skipped and workflow continues with next step
 """
 
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from agno.models.openai import OpenAIChat
+from agno.workflow import OnReject
 from agno.workflow.step import Step
 from agno.workflow.workflow import Workflow
 
@@ -50,7 +51,7 @@ workflow = Workflow(
             agent=process_agent,
             requires_confirmation=True,
             confirmation_message="About to process sensitive data. Confirm?",
-            on_reject="skip",  # If rejected, skip this step and continue with save_results
+            on_reject=OnReject.skip,  # If rejected, skip this step and continue with save_results
         ),
         Step(
             name="save_results",

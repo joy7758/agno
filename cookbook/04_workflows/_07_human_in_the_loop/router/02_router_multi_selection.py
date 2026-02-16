@@ -121,11 +121,31 @@ collect_step = Step(name="collect_data", executor=collect_data)
 processing_router = Router(
     name="processing_pipeline",
     choices=[
-        Step(name="clean", description="Clean and normalize data (remove duplicates, fix nulls)", executor=clean_data),
-        Step(name="validate", description="Validate data integrity and business rules", executor=validate_data),
-        Step(name="enrich", description="Enrich with external data sources", executor=enrich_data),
-        Step(name="transform", description="Transform for ML/analysis (normalize, encode)", executor=transform_data),
-        Step(name="aggregate", description="Aggregate for reporting (group, summarize)", executor=aggregate_data),
+        Step(
+            name="clean",
+            description="Clean and normalize data (remove duplicates, fix nulls)",
+            executor=clean_data,
+        ),
+        Step(
+            name="validate",
+            description="Validate data integrity and business rules",
+            executor=validate_data,
+        ),
+        Step(
+            name="enrich",
+            description="Enrich with external data sources",
+            executor=enrich_data,
+        ),
+        Step(
+            name="transform",
+            description="Transform for ML/analysis (normalize, encode)",
+            executor=transform_data,
+        ),
+        Step(
+            name="aggregate",
+            description="Aggregate for reporting (group, summarize)",
+            executor=aggregate_data,
+        ),
     ],
     requires_user_input=True,
     user_input_message="Select processing steps to apply (comma-separated for multiple):",
@@ -170,7 +190,9 @@ if __name__ == "__main__":
                 # Handle comma-separated selections
                 selections = [s.strip() for s in selection.split(",")]
                 if len(selections) > 1:
-                    requirement.select_multiple(selections)  # Use select_multiple for list
+                    requirement.select_multiple(
+                        selections
+                    )  # Use select_multiple for list
                     print(f"\n[HITL] Selected {len(selections)} steps: {selections}")
                 else:
                     requirement.select(selections[0])  # Single selection
@@ -189,7 +211,9 @@ if __name__ == "__main__":
                 requirement.set_user_input(**user_values)
 
         for requirement in run_output.steps_requiring_confirmation:
-            print(f"\n[HITL] {requirement.step_name}: {requirement.confirmation_message}")
+            print(
+                f"\n[HITL] {requirement.step_name}: {requirement.confirmation_message}"
+            )
             if input("Continue? (yes/no): ").strip().lower() in ("yes", "y"):
                 requirement.confirm()
             else:

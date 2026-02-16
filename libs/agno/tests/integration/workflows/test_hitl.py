@@ -19,7 +19,6 @@ from agno.workflow.step import Step
 from agno.workflow.types import StepInput, StepOutput
 from agno.workflow.workflow import Workflow
 
-
 # =============================================================================
 # Test Step Functions
 # =============================================================================
@@ -977,8 +976,7 @@ class TestStepImmutability:
 
         # CRITICAL: Step configuration should NOT be mutated
         assert confirm_step.requires_confirmation is True, (
-            "Step.requires_confirmation was mutated after continue_run! "
-            "This breaks workflow reusability."
+            "Step.requires_confirmation was mutated after continue_run! This breaks workflow reusability."
         )
 
     def test_step_user_input_not_mutated_after_continue(self, shared_db):
@@ -1014,8 +1012,7 @@ class TestStepImmutability:
 
         # CRITICAL: Step configuration should NOT be mutated
         assert input_step.requires_user_input is True, (
-            "Step.requires_user_input was mutated after continue_run! "
-            "This breaks workflow reusability."
+            "Step.requires_user_input was mutated after continue_run! This breaks workflow reusability."
         )
 
     def test_workflow_reusable_after_hitl_confirmation(self, shared_db):
@@ -1053,8 +1050,7 @@ class TestStepImmutability:
 
         # CRITICAL: Second run should ALSO pause at confirmation
         assert run2.is_paused is True, (
-            "Second run should pause at confirmation step! "
-            "If this fails, step.requires_confirmation was mutated."
+            "Second run should pause at confirmation step! If this fails, step.requires_confirmation was mutated."
         )
         assert len(run2.step_requirements) == 1
         assert run2.step_requirements[0].step_name == "confirm_step"
@@ -1096,8 +1092,7 @@ class TestStepImmutability:
 
         # CRITICAL: Second run should ALSO pause at user input
         assert run2.is_paused is True, (
-            "Second run should pause at user input step! "
-            "If this fails, step.requires_user_input was mutated."
+            "Second run should pause at user input step! If this fails, step.requires_user_input was mutated."
         )
         assert run2.step_requirements[0].step_name == "input_step"
 
@@ -1142,8 +1137,7 @@ class TestStepImmutability:
 
         # CRITICAL: Router configuration should NOT be mutated
         assert router.requires_user_input is True, (
-            "Router.requires_user_input was mutated after continue_run! "
-            "This breaks workflow reusability."
+            "Router.requires_user_input was mutated after continue_run! This breaks workflow reusability."
         )
 
     def test_workflow_reusable_after_router_selection(self, shared_db):
@@ -1180,8 +1174,7 @@ class TestStepImmutability:
 
         # CRITICAL: Second run should ALSO pause at router
         assert run2.is_paused is True, (
-            "Second run should pause at router! "
-            "If this fails, Router.requires_user_input was mutated."
+            "Second run should pause at router! If this fails, Router.requires_user_input was mutated."
         )
         assert len(run2.router_requirements) == 1
 
@@ -1252,6 +1245,4 @@ class TestStepImmutability:
             assert result.status == RunStatus.completed, f"Run {i} should complete"
 
             # Verify step still has correct configuration
-            assert confirm_step.requires_confirmation is True, (
-                f"Step was mutated after run {i}"
-            )
+            assert confirm_step.requires_confirmation is True, f"Step was mutated after run {i}"

@@ -49,9 +49,7 @@ content_agent = Agent(
 def format_output(step_input: StepInput) -> StepOutput:
     """Format the final output."""
     content = step_input.previous_step_content or "No content generated"
-    return StepOutput(
-        content=f"=== GENERATED CONTENT ===\n\n{content}\n\n=== END ==="
-    )
+    return StepOutput(content=f"=== GENERATED CONTENT ===\n\n{content}\n\n=== END ===")
 
 
 # Define workflow with Step-level HITL configuration
@@ -95,7 +93,11 @@ workflow = Workflow(
 # Alternative: Using executor function with Step-level HITL
 def process_data(step_input: StepInput) -> StepOutput:
     """Process data with user-specified options."""
-    user_input = step_input.additional_data.get("user_input", {}) if step_input.additional_data else {}
+    user_input = (
+        step_input.additional_data.get("user_input", {})
+        if step_input.additional_data
+        else {}
+    )
 
     format_type = user_input.get("format", "json")
     include_metadata = user_input.get("include_metadata", False)
@@ -170,7 +172,12 @@ if __name__ == "__main__":
                         elif field.field_type == "float":
                             user_values[field.name] = float(value)
                         elif field.field_type == "bool":
-                            user_values[field.name] = value.lower() in ("true", "yes", "1", "y")
+                            user_values[field.name] = value.lower() in (
+                                "true",
+                                "yes",
+                                "1",
+                                "y",
+                            )
                         else:
                             user_values[field.name] = value
 

@@ -109,13 +109,14 @@ def finalize(step_input: StepInput) -> StepOutput:
     """Finalize and return results."""
     results = step_input.previous_step_content or "No processing performed"
     return StepOutput(
-        content=f"=== FINAL RESULTS ===\n\n{results}\n\n"
-        "=== PROCESSING COMPLETE ==="
+        content=f"=== FINAL RESULTS ===\n\n{results}\n\n=== PROCESSING COMPLETE ==="
     )
 
 
 # Define individual steps
-quick_scan_step = Step(name="quick_scan", description="Fast surface-level scan (30s)", executor=quick_scan)
+quick_scan_step = Step(
+    name="quick_scan", description="Fast surface-level scan (30s)", executor=quick_scan
+)
 
 # Define step sequences as Steps containers with descriptive names
 standard_package = Steps(
@@ -151,9 +152,9 @@ workflow = Workflow(
         Router(
             name="package_selector",
             choices=[
-                quick_scan_step,      # Single step
-                standard_package,     # Steps container (2 steps)
-                premium_package,      # Steps container (4 steps)
+                quick_scan_step,  # Single step
+                standard_package,  # Steps container (2 steps)
+                premium_package,  # Steps container (4 steps)
             ],
             requires_user_input=True,
             user_input_message="Select a processing package:",
@@ -173,7 +174,11 @@ workflow_with_nested_lists = Workflow(
         Router(
             name="package_selector",
             choices=[
-                Step(name="quick_scan", description="Fast scan (30s)", executor=quick_scan),
+                Step(
+                    name="quick_scan",
+                    description="Fast scan (30s)",
+                    executor=quick_scan,
+                ),
                 # Nested list -> becomes "steps_group_1" Steps container
                 [
                     Step(name="deep_analysis", executor=deep_analysis),
@@ -226,7 +231,9 @@ if __name__ == "__main__":
                 print(f"\n[HITL] Selected package: {selection}")
 
         for requirement in run_output.steps_requiring_confirmation:
-            print(f"\n[HITL] {requirement.step_name}: {requirement.confirmation_message}")
+            print(
+                f"\n[HITL] {requirement.step_name}: {requirement.confirmation_message}"
+            )
             if input("Continue? (yes/no): ").strip().lower() in ("yes", "y"):
                 requirement.confirm()
             else:

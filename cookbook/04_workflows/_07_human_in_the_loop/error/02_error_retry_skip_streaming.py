@@ -27,6 +27,7 @@ from agno.run.workflow import (
     WorkflowCompletedEvent,
     WorkflowStartedEvent,
 )
+from agno.workflow import OnError
 from agno.workflow.step import Step
 from agno.workflow.types import StepInput, StepOutput
 from agno.workflow.workflow import Workflow
@@ -70,7 +71,7 @@ workflow = Workflow(
         Step(
             name="fetch_data",
             executor=unreliable_api_call,
-            on_error="pause",  # Pause on error and let user decide
+            on_error=OnError.pause,  # Pause on error and let user decide
         ),
         Step(
             name="process_data",
@@ -95,7 +96,9 @@ def handle_error_hitl(run_output):
             print(f"Retry Count: {error_req.retry_count}")
             print("-" * 40)
 
-            user_choice = input("\nWhat would you like to do? (retry/skip): ").strip().lower()
+            user_choice = (
+                input("\nWhat would you like to do? (retry/skip): ").strip().lower()
+            )
 
             if user_choice == "retry":
                 error_req.retry()
@@ -115,7 +118,9 @@ def main():
 
     # Run with streaming - returns an iterator of events
     # stream=True enables streaming output, stream_events=True enables step events
-    event_stream = workflow.run("Fetch and process data", stream=True, stream_events=True)
+    event_stream = workflow.run(
+        "Fetch and process data", stream=True, stream_events=True
+    )
 
     for event in event_stream:
         if isinstance(event, WorkflowStartedEvent):
@@ -127,7 +132,11 @@ def main():
         elif isinstance(event, StepCompletedEvent):
             print(f"[EVENT] Step completed: {event.step_name}")
             if event.content:
-                preview = str(event.content)[:60] + "..." if len(str(event.content)) > 60 else str(event.content)
+                preview = (
+                    str(event.content)[:60] + "..."
+                    if len(str(event.content)) > 60
+                    else str(event.content)
+                )
                 print(f"        Content: {preview}")
 
         elif isinstance(event, WorkflowCompletedEvent):
@@ -144,7 +153,9 @@ def main():
         print("\n[INFO] Continuing workflow with streaming...\n")
 
         # Continue with streaming
-        continue_stream = workflow.continue_run(run_output, stream=True, stream_events=True)
+        continue_stream = workflow.continue_run(
+            run_output, stream=True, stream_events=True
+        )
 
         for event in continue_stream:
             if isinstance(event, StepStartedEvent):
@@ -153,7 +164,11 @@ def main():
             elif isinstance(event, StepCompletedEvent):
                 print(f"[EVENT] Step completed: {event.step_name}")
                 if event.content:
-                    preview = str(event.content)[:60] + "..." if len(str(event.content)) > 60 else str(event.content)
+                    preview = (
+                        str(event.content)[:60] + "..."
+                        if len(str(event.content)) > 60
+                        else str(event.content)
+                    )
                     print(f"        Content: {preview}")
 
             elif isinstance(event, WorkflowCompletedEvent):

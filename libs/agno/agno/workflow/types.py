@@ -16,6 +16,32 @@ from agno.utils.media import (
 from agno.utils.timer import Timer
 
 
+class OnReject(str, Enum):
+    """Action to take when a step requiring confirmation is rejected.
+
+    Attributes:
+        skip: Skip the rejected step and continue with the next step in the workflow.
+        cancel: Cancel the entire workflow when the step is rejected.
+    """
+
+    skip = "skip"
+    cancel = "cancel"
+
+
+class OnError(str, Enum):
+    """Action to take when a step encounters an error during execution.
+
+    Attributes:
+        fail: Fail the workflow immediately when an error occurs (default).
+        skip: Skip the failed step and continue with the next step.
+        pause: Pause the workflow and allow the user to decide (retry or skip) via HITL.
+    """
+
+    fail = "fail"
+    skip = "skip"
+    pause = "pause"
+
+
 @dataclass
 class WorkflowExecutionInput:
     """Input data for a step execution"""
@@ -652,9 +678,7 @@ class StepRequirement:
 
             # Validate allowed values if specified
             if field.allowed_values and value not in field.allowed_values:
-                errors.append(
-                    f"Field '{field.name}' value '{value}' is not in allowed values: {field.allowed_values}"
-                )
+                errors.append(f"Field '{field.name}' value '{value}' is not in allowed values: {field.allowed_values}")
 
         if errors:
             raise ValueError("User input validation failed:\n  - " + "\n  - ".join(errors))

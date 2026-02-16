@@ -137,6 +137,96 @@ def _normalize_user_input_schema(schema: Optional[List[Any]]) -> Optional[List[U
     return result
 
 
+# =============================================================================
+# HITL Helper Functions
+# =============================================================================
+
+
+def _create_step_requirement(
+    step: "Step",
+    step_name: str,
+    step_index: int,
+    step_input: "StepInput",
+) -> "StepRequirement":
+    """Create a StepRequirement for HITL pause (confirmation or user input).
+
+    Args:
+        step: The Step object requiring HITL.
+        step_name: Name of the step.
+        step_index: Index of the step in the workflow.
+        step_input: The prepared input for the step.
+
+    Returns:
+        StepRequirement configured for the step's HITL needs.
+    """
+    user_input_schema = _normalize_user_input_schema(step.user_input_schema) if step.requires_user_input else None
+
+    return StepRequirement(
+        step_id=step.step_id or str(uuid4()),
+        step_name=step_name,
+        step_index=step_index,
+        requires_confirmation=step.requires_confirmation,
+        confirmation_message=step.confirmation_message,
+        on_reject=str(step.on_reject),
+        requires_user_input=step.requires_user_input,
+        user_input_message=step.user_input_message,
+        user_input_schema=user_input_schema,
+        step_input=step_input,
+    )
+
+
+def _create_error_requirement(
+    step: Union["Step", "Steps", "Loop", "Parallel", "Condition", "Router"],
+    step_name: str,
+    step_index: int,
+    error: Exception,
+) -> "ErrorRequirement":
+    """Create an ErrorRequirement for HITL pause on error.
+
+    Args:
+        step: The step that encountered an error.
+        step_name: Name of the step.
+        step_index: Index of the step in the workflow.
+        error: The exception that was raised.
+
+    Returns:
+        ErrorRequirement configured for error handling.
+    """
+    return ErrorRequirement(
+        step_id=getattr(step, "step_id", str(uuid4())),
+        step_name=step_name,
+        step_index=step_index,
+        error_message=str(error),
+        error_type=type(error).__name__,
+        retry_count=getattr(step, "_retry_count", 0),
+    )
+
+
+def _create_skipped_step_output(
+    step_name: str,
+    step_id: str,
+    error: Exception,
+) -> "StepOutput":
+    """Create a StepOutput for a skipped step (due to error or rejection).
+
+    Args:
+        step_name: Name of the step.
+        step_id: ID of the step.
+        error: The error that caused the skip.
+
+    Returns:
+        StepOutput marked as skipped.
+    """
+    return StepOutput(
+        step_name=step_name,
+        step_id=step_id,
+        step_type=StepType.STEP,
+        content=f"Step skipped due to error: {error}",
+        success=False,
+        error=str(error),
+    )
+
+
 def _step_from_dict(
     data: Dict[str, Any],
     registry: Optional["Registry"] = None,
@@ -1772,22 +1862,7 @@ class Workflow:
                         hitl_type = "confirmation" if step.requires_confirmation else "user input"
                         log_debug(f"Step '{step_name}' requires {hitl_type} - pausing workflow")
 
-                        # Build user input schema if needed
-                        user_input_schema = _normalize_user_input_schema(step.user_input_schema) if step.requires_user_input else None
-
-                        # Create step requirement
-                        step_requirement = StepRequirement(
-                            step_id=step.step_id or str(uuid4()),
-                            step_name=step_name,
-                            step_index=i,
-                            requires_confirmation=step.requires_confirmation,
-                            confirmation_message=step.confirmation_message,
-                            on_reject=step.on_reject,
-                            requires_user_input=step.requires_user_input,
-                            user_input_message=step.user_input_message,
-                            user_input_schema=user_input_schema,
-                            step_input=step_input,
-                        )
+                        step_requirement = _create_step_requirement(step, step_name, i, step_input)
 
                         # Store the paused state
                         workflow_run_response.status = RunStatus.paused
@@ -1806,7 +1881,6 @@ class Workflow:
                     if isinstance(step, Router) and step.requires_user_input:
                         log_debug(f"Router '{step_name}' requires user selection - pausing workflow")
 
-                        # Create router requirement for user selection
                         router_requirement = step.create_router_requirement(
                             router_id=str(uuid4()),
                             step_input=step_input,
@@ -1848,16 +1922,7 @@ class Workflow:
                             # Pause workflow and let user decide to retry or skip
                             log_debug(f"Step '{step_name}' failed with on_error='pause' - pausing workflow")
 
-                            error_requirement = ErrorRequirement(
-                                step_id=getattr(step, "step_id", str(uuid4())),
-                                step_name=step_name,
-                                step_index=i,
-                                error_message=str(step_error),
-                                error_type=type(step_error).__name__,
-                                retry_count=getattr(step, "_retry_count", 0),
-                                # Note: We don't store step_input here to avoid serialization issues
-                                # It will be reconstructed when resuming
-                            )
+                            error_requirement = _create_error_requirement(step, step_name, i, step_error)
 
                             # Store the paused state
                             workflow_run_response.status = RunStatus.paused
@@ -1874,13 +1939,8 @@ class Workflow:
                         elif step_on_error == "skip":
                             # Skip the failed step and continue
                             log_debug(f"Step '{step_name}' failed with on_error='skip' - skipping step")
-                            step_output = StepOutput(
-                                step_name=step_name,
-                                step_id=getattr(step, "step_id", str(uuid4())),
-                                step_type=StepType.STEP,
-                                content=f"Step skipped due to error: {step_error}",
-                                success=False,
-                                error=str(step_error),
+                            step_output = _create_skipped_step_output(
+                                step_name, getattr(step, "step_id", str(uuid4())), step_error
                             )
                         else:
                             # Default behavior: re-raise the exception
@@ -2067,22 +2127,7 @@ class Workflow:
                         hitl_type = "confirmation" if step.requires_confirmation else "user input"
                         log_debug(f"Step '{step_name}' requires {hitl_type} - pausing workflow")
 
-                        # Build user input schema if needed
-                        user_input_schema = _normalize_user_input_schema(step.user_input_schema) if step.requires_user_input else None
-
-                        # Create step requirement
-                        step_requirement = StepRequirement(
-                            step_id=step.step_id or str(uuid4()),
-                            step_name=step_name,
-                            step_index=i,
-                            requires_confirmation=step.requires_confirmation,
-                            confirmation_message=step.confirmation_message,
-                            on_reject=step.on_reject,
-                            requires_user_input=step.requires_user_input,
-                            user_input_message=step.user_input_message,
-                            user_input_schema=user_input_schema,
-                            step_input=step_input,
-                        )
+                        step_requirement = _create_step_requirement(step, step_name, i, step_input)
 
                         # Store the paused state
                         workflow_run_response.status = RunStatus.paused
@@ -2248,14 +2293,7 @@ class Workflow:
                             # Pause workflow and let user decide to retry or skip
                             log_debug(f"Step '{step_name}' failed with on_error='pause' - pausing workflow")
 
-                            error_requirement = ErrorRequirement(
-                                step_id=getattr(step, "step_id", str(uuid4())),
-                                step_name=step_name,
-                                step_index=i,
-                                error_message=str(step_error_exception),
-                                error_type=type(step_error_exception).__name__,
-                                retry_count=getattr(step, "_retry_count", 0),
-                            )
+                            error_requirement = _create_error_requirement(step, step_name, i, step_error_exception)
 
                             # Store the paused state
                             workflow_run_response.status = RunStatus.paused
@@ -2285,13 +2323,8 @@ class Workflow:
                         elif step_on_error == "skip":
                             # Skip the failed step and continue
                             log_debug(f"Step '{step_name}' failed with on_error='skip' - skipping step")
-                            step_output = StepOutput(
-                                step_name=step_name,
-                                step_id=getattr(step, "step_id", str(uuid4())),
-                                step_type=StepType.STEP,
-                                content=f"Step skipped due to error: {step_error_exception}",
-                                success=False,
-                                error=str(step_error_exception),
+                            step_output = _create_skipped_step_output(
+                                step_name, getattr(step, "step_id", str(uuid4())), step_error_exception
                             )
                             collected_step_outputs.append(step_output)
                             previous_step_outputs[step_name] = step_output
@@ -2612,22 +2645,7 @@ class Workflow:
                         hitl_type = "confirmation" if step.requires_confirmation else "user input"
                         log_debug(f"Step '{step_name}' requires {hitl_type} - pausing workflow")
 
-                        # Build user input schema if needed
-                        user_input_schema = _normalize_user_input_schema(step.user_input_schema) if step.requires_user_input else None
-
-                        # Create step requirement
-                        step_requirement = StepRequirement(
-                            step_id=step.step_id or str(uuid4()),
-                            step_name=step_name,
-                            step_index=i,
-                            requires_confirmation=step.requires_confirmation,
-                            confirmation_message=step.confirmation_message,
-                            on_reject=step.on_reject,
-                            requires_user_input=step.requires_user_input,
-                            user_input_message=step.user_input_message,
-                            user_input_schema=user_input_schema,
-                            step_input=step_input,
-                        )
+                        step_requirement = _create_step_requirement(step, step_name, i, step_input)
 
                         # Store the paused state
                         workflow_run_response.status = RunStatus.paused
@@ -2695,14 +2713,7 @@ class Workflow:
                             # Pause workflow and let user decide to retry or skip
                             log_debug(f"Step '{step_name}' failed with on_error='pause' - pausing workflow")
 
-                            error_requirement = ErrorRequirement(
-                                step_id=getattr(step, "step_id", str(uuid4())),
-                                step_name=step_name,
-                                step_index=i,
-                                error_message=str(step_error),
-                                error_type=type(step_error).__name__,
-                                retry_count=getattr(step, "_retry_count", 0),
-                            )
+                            error_requirement = _create_error_requirement(step, step_name, i, step_error)
 
                             # Store the paused state
                             workflow_run_response.status = RunStatus.paused
@@ -2724,13 +2735,8 @@ class Workflow:
                         elif step_on_error == "skip":
                             # Skip the failed step and continue
                             log_debug(f"Step '{step_name}' failed with on_error='skip' - skipping step")
-                            step_output = StepOutput(
-                                step_name=step_name,
-                                step_id=getattr(step, "step_id", str(uuid4())),
-                                step_type=StepType.STEP,
-                                content=f"Step skipped due to error: {step_error}",
-                                success=False,
-                                error=str(step_error),
+                            step_output = _create_skipped_step_output(
+                                step_name, getattr(step, "step_id", str(uuid4())), step_error
                             )
                         else:
                             # Default behavior: re-raise the exception
@@ -2932,22 +2938,7 @@ class Workflow:
                         hitl_type = "confirmation" if step.requires_confirmation else "user input"
                         log_debug(f"Step '{step_name}' requires {hitl_type} - pausing workflow")
 
-                        # Build user input schema if needed
-                        user_input_schema = _normalize_user_input_schema(step.user_input_schema) if step.requires_user_input else None
-
-                        # Create step requirement
-                        step_requirement = StepRequirement(
-                            step_id=step.step_id or str(uuid4()),
-                            step_name=step_name,
-                            step_index=i,
-                            requires_confirmation=step.requires_confirmation,
-                            confirmation_message=step.confirmation_message,
-                            on_reject=step.on_reject,
-                            requires_user_input=step.requires_user_input,
-                            user_input_message=step.user_input_message,
-                            user_input_schema=user_input_schema,
-                            step_input=step_input,
-                        )
+                        step_requirement = _create_step_requirement(step, step_name, i, step_input)
 
                         # Store the paused state
                         workflow_run_response.status = RunStatus.paused
@@ -3127,14 +3118,7 @@ class Workflow:
                             # Pause workflow and let user decide to retry or skip
                             log_debug(f"Step '{step_name}' failed with on_error='pause' - pausing workflow")
 
-                            error_requirement = ErrorRequirement(
-                                step_id=getattr(step, "step_id", str(uuid4())),
-                                step_name=step_name,
-                                step_index=i,
-                                error_message=str(step_error_exception),
-                                error_type=type(step_error_exception).__name__,
-                                retry_count=getattr(step, "_retry_count", 0),
-                            )
+                            error_requirement = _create_error_requirement(step, step_name, i, step_error_exception)
 
                             # Store the paused state
                             workflow_run_response.status = RunStatus.paused
@@ -3171,13 +3155,8 @@ class Workflow:
                         elif step_on_error == "skip":
                             # Skip the failed step and continue
                             log_debug(f"Step '{step_name}' failed with on_error='skip' - skipping step")
-                            step_output = StepOutput(
-                                step_name=step_name,
-                                step_id=getattr(step, "step_id", str(uuid4())),
-                                step_type=StepType.STEP,
-                                content=f"Step skipped due to error: {step_error_exception}",
-                                success=False,
-                                error=str(step_error_exception),
+                            step_output = _create_skipped_step_output(
+                                step_name, getattr(step, "step_id", str(uuid4())), step_error_exception
                             )
                             collected_step_outputs.append(step_output)
                             previous_step_outputs[step_name] = step_output
@@ -4849,25 +4828,15 @@ class Workflow:
                 raise_if_cancelled(workflow_run_response.run_id)  # type: ignore
 
                 # Check if step requires HITL (confirmation or user input) - for subsequent steps
-                if isinstance(step, Step) and (step.requires_confirmation or step.requires_user_input) and i != start_step_index:
+                if (
+                    isinstance(step, Step)
+                    and (step.requires_confirmation or step.requires_user_input)
+                    and i != start_step_index
+                ):
                     hitl_type = "confirmation" if step.requires_confirmation else "user input"
                     log_debug(f"Step '{step_name}' requires {hitl_type} - pausing workflow")
 
-                    # Build user input schema if needed
-                    user_input_schema = _normalize_user_input_schema(step.user_input_schema) if step.requires_user_input else None
-
-                    step_requirement = StepRequirement(
-                        step_id=step.step_id or str(uuid4()),
-                        step_name=step_name,
-                        step_index=i,
-                        requires_confirmation=step.requires_confirmation,
-                        confirmation_message=step.confirmation_message,
-                        on_reject=step.on_reject,
-                        requires_user_input=step.requires_user_input,
-                        user_input_message=step.user_input_message,
-                        user_input_schema=user_input_schema,
-                        step_input=step_input,
-                    )
+                    step_requirement = _create_step_requirement(step, step_name, i, step_input)
 
                     workflow_run_response.status = RunStatus.paused
                     workflow_run_response.step_requirements = [step_requirement]
@@ -4923,14 +4892,7 @@ class Workflow:
                         # Pause workflow and let user decide to retry or skip
                         log_debug(f"Step '{step_name}' failed with on_error='pause' - pausing workflow")
 
-                        error_requirement = ErrorRequirement(
-                            step_id=getattr(step, "step_id", str(uuid4())),
-                            step_name=step_name,
-                            step_index=i,
-                            error_message=str(step_error),
-                            error_type=type(step_error).__name__,
-                            retry_count=getattr(step, "_retry_count", 0),
-                        )
+                        error_requirement = _create_error_requirement(step, step_name, i, step_error)
 
                         # Store the paused state
                         workflow_run_response.status = RunStatus.paused
@@ -4947,13 +4909,8 @@ class Workflow:
                     elif step_on_error == "skip":
                         # Skip the failed step and continue
                         log_debug(f"Step '{step_name}' failed with on_error='skip' - skipping step")
-                        step_output = StepOutput(
-                            step_name=step_name,
-                            step_id=getattr(step, "step_id", str(uuid4())),
-                            step_type=StepType.STEP,
-                            content=f"Step skipped due to error: {step_error}",
-                            success=False,
-                            error=str(step_error),
+                        step_output = _create_skipped_step_output(
+                            step_name, getattr(step, "step_id", str(uuid4())), step_error
                         )
                     else:
                         # Default behavior: re-raise the exception
@@ -5186,25 +5143,15 @@ class Workflow:
                     continue  # Move to next step
 
                 # Check if step requires HITL (confirmation or user input) - for subsequent steps
-                if isinstance(step, Step) and (step.requires_confirmation or step.requires_user_input) and i != start_step_index:
+                if (
+                    isinstance(step, Step)
+                    and (step.requires_confirmation or step.requires_user_input)
+                    and i != start_step_index
+                ):
                     hitl_type = "confirmation" if step.requires_confirmation else "user input"
                     log_debug(f"Step '{step_name}' requires {hitl_type} - pausing workflow")
 
-                    # Build user input schema if needed
-                    user_input_schema = _normalize_user_input_schema(step.user_input_schema) if step.requires_user_input else None
-
-                    step_requirement = StepRequirement(
-                        step_id=step.step_id or str(uuid4()),
-                        step_name=step_name,
-                        step_index=i,
-                        requires_confirmation=step.requires_confirmation,
-                        confirmation_message=step.confirmation_message,
-                        on_reject=step.on_reject,
-                        requires_user_input=step.requires_user_input,
-                        user_input_message=step.user_input_message,
-                        user_input_schema=user_input_schema,
-                        step_input=step_input,
-                    )
+                    step_requirement = _create_step_requirement(step, step_name, i, step_input)
 
                     workflow_run_response.status = RunStatus.paused
                     workflow_run_response.step_requirements = [step_requirement]
@@ -5348,14 +5295,7 @@ class Workflow:
                     if step_on_error == "pause":
                         log_debug(f"Step '{step_name}' failed with on_error='pause' - pausing workflow")
 
-                        error_requirement = ErrorRequirement(
-                            step_id=getattr(step, "step_id", str(uuid4())),
-                            step_name=step_name,
-                            step_index=i,
-                            error_message=str(step_error_exception),
-                            error_type=type(step_error_exception).__name__,
-                            retry_count=getattr(step, "_retry_count", 0),
-                        )
+                        error_requirement = _create_error_requirement(step, step_name, i, step_error_exception)
 
                         workflow_run_response.status = RunStatus.paused
                         workflow_run_response.error_requirements = [error_requirement]
@@ -5381,13 +5321,8 @@ class Workflow:
                         return
                     elif step_on_error == "skip":
                         log_debug(f"Step '{step_name}' failed with on_error='skip' - skipping step")
-                        step_output = StepOutput(
-                            step_name=step_name,
-                            step_id=getattr(step, "step_id", str(uuid4())),
-                            step_type=StepType.STEP,
-                            content=f"Step skipped due to error: {step_error_exception}",
-                            success=False,
-                            error=str(step_error_exception),
+                        step_output = _create_skipped_step_output(
+                            step_name, getattr(step, "step_id", str(uuid4())), step_error_exception
                         )
                         collected_step_outputs.append(step_output)
                         previous_step_outputs[step_name] = step_output
@@ -5858,25 +5793,15 @@ class Workflow:
                     continue  # Move to next step
 
                 # Check if step requires HITL (confirmation or user input) - for subsequent steps
-                if isinstance(step, Step) and (step.requires_confirmation or step.requires_user_input) and i != start_step_index:
+                if (
+                    isinstance(step, Step)
+                    and (step.requires_confirmation or step.requires_user_input)
+                    and i != start_step_index
+                ):
                     hitl_type = "confirmation" if step.requires_confirmation else "user input"
                     log_debug(f"Step '{step_name}' requires {hitl_type} - pausing workflow")
 
-                    # Build user input schema if needed
-                    user_input_schema = _normalize_user_input_schema(step.user_input_schema) if step.requires_user_input else None
-
-                    step_requirement = StepRequirement(
-                        step_id=step.step_id or str(uuid4()),
-                        step_name=step_name,
-                        step_index=i,
-                        requires_confirmation=step.requires_confirmation,
-                        confirmation_message=step.confirmation_message,
-                        on_reject=step.on_reject,
-                        requires_user_input=step.requires_user_input,
-                        user_input_message=step.user_input_message,
-                        user_input_schema=user_input_schema,
-                        step_input=step_input,
-                    )
+                    step_requirement = _create_step_requirement(step, step_name, i, step_input)
 
                     workflow_run_response.status = RunStatus.paused
                     workflow_run_response.step_requirements = [step_requirement]
@@ -5931,14 +5856,7 @@ class Workflow:
                     if step_on_error == "pause":
                         log_debug(f"Step '{step_name}' failed with on_error='pause' - pausing workflow")
 
-                        error_requirement = ErrorRequirement(
-                            step_id=getattr(step, "step_id", str(uuid4())),
-                            step_name=step_name,
-                            step_index=i,
-                            error_message=str(step_error),
-                            error_type=type(step_error).__name__,
-                            retry_count=getattr(step, "_retry_count", 0),
-                        )
+                        error_requirement = _create_error_requirement(step, step_name, i, step_error)
 
                         workflow_run_response.status = RunStatus.paused
                         workflow_run_response.error_requirements = [error_requirement]
@@ -5952,13 +5870,8 @@ class Workflow:
                         return workflow_run_response
                     elif step_on_error == "skip":
                         log_debug(f"Step '{step_name}' failed with on_error='skip' - skipping step")
-                        step_output = StepOutput(
-                            step_name=step_name,
-                            step_id=getattr(step, "step_id", str(uuid4())),
-                            step_type=StepType.STEP,
-                            content=f"Step skipped due to error: {step_error}",
-                            success=False,
-                            error=str(step_error),
+                        step_output = _create_skipped_step_output(
+                            step_name, getattr(step, "step_id", str(uuid4())), step_error
                         )
                     else:
                         raise
@@ -6108,7 +6021,9 @@ class Workflow:
 
                 # Handle Router with user selection - execute only the selected steps (async streaming)
                 if i == start_step_index and isinstance(step, Router) and router_selection:
-                    log_debug(f"Router '{step_name}' executing with user selection (async streaming): {router_selection}")
+                    log_debug(
+                        f"Router '{step_name}' executing with user selection (async streaming): {router_selection}"
+                    )
 
                     # Get the selected steps from the router
                     step._prepare_steps()
@@ -6190,25 +6105,15 @@ class Workflow:
                     continue  # Move to next step
 
                 # Check if step requires HITL (confirmation or user input) - for subsequent steps
-                if isinstance(step, Step) and (step.requires_confirmation or step.requires_user_input) and i != start_step_index:
+                if (
+                    isinstance(step, Step)
+                    and (step.requires_confirmation or step.requires_user_input)
+                    and i != start_step_index
+                ):
                     hitl_type = "confirmation" if step.requires_confirmation else "user input"
                     log_debug(f"Step '{step_name}' requires {hitl_type} - pausing workflow")
 
-                    # Build user input schema if needed
-                    user_input_schema = _normalize_user_input_schema(step.user_input_schema) if step.requires_user_input else None
-
-                    step_requirement = StepRequirement(
-                        step_id=step.step_id or str(uuid4()),
-                        step_name=step_name,
-                        step_index=i,
-                        requires_confirmation=step.requires_confirmation,
-                        confirmation_message=step.confirmation_message,
-                        on_reject=step.on_reject,
-                        requires_user_input=step.requires_user_input,
-                        user_input_message=step.user_input_message,
-                        user_input_schema=user_input_schema,
-                        step_input=step_input,
-                    )
+                    step_requirement = _create_step_requirement(step, step_name, i, step_input)
 
                     workflow_run_response.status = RunStatus.paused
                     workflow_run_response.step_requirements = [step_requirement]
@@ -6352,14 +6257,7 @@ class Workflow:
                     if step_on_error == "pause":
                         log_debug(f"Step '{step_name}' failed with on_error='pause' - pausing workflow")
 
-                        error_requirement = ErrorRequirement(
-                            step_id=getattr(step, "step_id", str(uuid4())),
-                            step_name=step_name,
-                            step_index=i,
-                            error_message=str(step_error_exception),
-                            error_type=type(step_error_exception).__name__,
-                            retry_count=getattr(step, "_retry_count", 0),
-                        )
+                        error_requirement = _create_error_requirement(step, step_name, i, step_error_exception)
 
                         workflow_run_response.status = RunStatus.paused
                         workflow_run_response.error_requirements = [error_requirement]
@@ -6385,13 +6283,8 @@ class Workflow:
                         return
                     elif step_on_error == "skip":
                         log_debug(f"Step '{step_name}' failed with on_error='skip' - skipping step")
-                        step_output = StepOutput(
-                            step_name=step_name,
-                            step_id=getattr(step, "step_id", str(uuid4())),
-                            step_type=StepType.STEP,
-                            content=f"Step skipped due to error: {step_error_exception}",
-                            success=False,
-                            error=str(step_error_exception),
+                        step_output = _create_skipped_step_output(
+                            step_name, getattr(step, "step_id", str(uuid4())), step_error_exception
                         )
                         collected_step_outputs.append(step_output)
                         previous_step_outputs[step_name] = step_output

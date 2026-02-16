@@ -56,7 +56,11 @@ def analyze_data(step_input: StepInput) -> StepOutput:
 def process_with_params(step_input: StepInput) -> StepOutput:
     """Process data with user-provided parameters."""
     # Get user input from additional_data
-    user_input = step_input.additional_data.get("user_input", {}) if step_input.additional_data else {}
+    user_input = (
+        step_input.additional_data.get("user_input", {})
+        if step_input.additional_data
+        else {}
+    )
 
     threshold = user_input.get("threshold", 0.5)
     mode = user_input.get("mode", "fast")
@@ -88,7 +92,9 @@ writer_agent = Agent(
 
 # Define steps
 analyze_step = Step(name="analyze_data", executor=analyze_data)
-process_step = Step(name="process_data", executor=process_with_params)  # @hitl auto-detected
+process_step = Step(
+    name="process_data", executor=process_with_params
+)  # @hitl auto-detected
 report_step = Step(name="generate_report", agent=writer_agent)
 
 # Create workflow
@@ -129,7 +135,11 @@ if __name__ == "__main__":
                         elif field.field_type == "float":
                             user_values[field.name] = float(value)
                         elif field.field_type == "bool":
-                            user_values[field.name] = value.lower() in ("true", "yes", "1")
+                            user_values[field.name] = value.lower() in (
+                                "true",
+                                "yes",
+                                "1",
+                            )
                         else:
                             user_values[field.name] = value
 

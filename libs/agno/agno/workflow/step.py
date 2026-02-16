@@ -30,7 +30,7 @@ from agno.session.workflow import WorkflowSession
 from agno.team import Team
 from agno.utils.log import log_debug, log_warning, logger, use_agent_logger, use_team_logger, use_workflow_logger
 from agno.utils.merge_dict import merge_dictionaries
-from agno.workflow.types import StepInput, StepOutput, StepType
+from agno.workflow.types import OnError, OnReject, StepInput, StepOutput, StepType
 
 StepExecutor = Callable[
     [StepInput],
@@ -77,17 +77,17 @@ class Step:
     requires_confirmation: bool = False
     # Message to display to the user when requesting confirmation
     confirmation_message: Optional[str] = None
-    # What to do when step is rejected: "skip" (skip step, continue workflow) or "cancel" (cancel workflow)
-    on_reject: str = "cancel"
+    # What to do when step is rejected: OnReject.skip (skip step, continue workflow) or OnReject.cancel (cancel workflow)
+    on_reject: Union[OnReject, str] = OnReject.skip
     # If True, the step will pause before execution and require user input
     requires_user_input: bool = False
     # Message to display to the user when requesting input
     user_input_message: Optional[str] = None
     # Schema for user input fields (list of dicts with name, field_type, description, required)
     user_input_schema: Optional[List[Dict[str, Any]]] = None
-    # What to do when step encounters an error: "fail" (default), "skip", "pause" (HITL)
-    # "pause" triggers HITL allowing user to retry or skip the failed step
-    on_error: str = "fail"
+    # What to do when step encounters an error: OnError.fail (default), OnError.skip, OnError.pause (HITL)
+    # OnError.pause triggers HITL allowing user to retry or skip the failed step
+    on_error: Union[OnError, str] = OnError.skip
 
     _retry_count: int = 0
 
@@ -106,11 +106,11 @@ class Step:
         num_history_runs: int = 3,
         requires_confirmation: bool = False,
         confirmation_message: Optional[str] = None,
-        on_reject: str = "cancel",
+        on_reject: Union[OnReject, str] = OnReject.skip,
         requires_user_input: bool = False,
         user_input_message: Optional[str] = None,
         user_input_schema: Optional[List[Dict[str, Any]]] = None,
-        on_error: str = "fail",
+        on_error: Union[OnError, str] = OnError.skip,
     ):
         # Auto-detect HITL metadata from @hitl decorator on executor function
         if executor is not None:
