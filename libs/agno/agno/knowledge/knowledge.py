@@ -67,13 +67,18 @@ class Knowledge(RemoteKnowledge):
 
     @property
     def knowledge_id(self) -> str:
-        """Generate a deterministic ID for this knowledge instance."""
+        """Generate a deterministic ID for this knowledge instance.
+
+        Must match _generate_knowledge_id() in agno.os.utils so that
+        backup storage paths and API routes resolve to the same ID.
+        """
         import hashlib
 
         name = self.name or "knowledge"
         db_id = self.contents_db.id if self.contents_db else "default"
-        id_seed = f"{name}:{db_id}"
-        hash_hex = hashlib.md5(id_seed.encode()).hexdigest()
+        table_name = self.contents_db.knowledge_table_name if self.contents_db else "unknown"
+        id_seed = f"{db_id}:{table_name}:{name}"
+        hash_hex = hashlib.sha256(id_seed.encode()).hexdigest()
         return f"{hash_hex[:8]}-{hash_hex[8:12]}-{hash_hex[12:16]}-{hash_hex[16:20]}-{hash_hex[20:32]}"
 
     @property
