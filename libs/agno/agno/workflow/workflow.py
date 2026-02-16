@@ -100,6 +100,7 @@ from agno.workflow.types import (
     WorkflowExecutionInput,
     WorkflowMetrics,
 )
+from agno.workflow.utils import ContinueExecutionState, finalize_workflow_completion
 
 STEP_TYPE_MAPPING = {
     Step: StepType.STEP,
@@ -4616,39 +4617,24 @@ class Workflow:
     ) -> WorkflowRunOutput:
         """Continue executing a workflow from a specific step index."""
         try:
-            # Restore previous step outputs from step_results
-            collected_step_outputs: List[Union[StepOutput, List[StepOutput]]] = list(
-                workflow_run_response.step_results or []
-            )
-            previous_step_outputs: Dict[str, StepOutput] = {}
-            for step_output in collected_step_outputs:
-                if isinstance(step_output, StepOutput) and step_output.step_name:
-                    previous_step_outputs[step_output.step_name] = step_output
-
-            shared_images: List[Image] = execution_input.images or []
-            output_images: List[Image] = (execution_input.images or []).copy()
-            shared_videos: List[Video] = execution_input.videos or []
-            output_videos: List[Video] = (execution_input.videos or []).copy()
-            shared_audio: List[Audio] = execution_input.audio or []
-            output_audio: List[Audio] = (execution_input.audio or []).copy()
-            shared_files: List[File] = execution_input.files or []
-            output_files: List[File] = (execution_input.files or []).copy()
-
-            # Restore shared media from previous steps
-            for step_output in collected_step_outputs:
-                if isinstance(step_output, StepOutput):
-                    shared_images.extend(step_output.images or [])
-                    shared_videos.extend(step_output.videos or [])
-                    shared_audio.extend(step_output.audio or [])
-                    shared_files.extend(step_output.files or [])
-                    output_images.extend(step_output.images or [])
-                    output_videos.extend(step_output.videos or [])
-                    output_audio.extend(step_output.audio or [])
-                    output_files.extend(step_output.files or [])
+            # Initialize execution state (restores step outputs and media from previous execution)
+            state = ContinueExecutionState(workflow_run_response, execution_input)
 
             # Get user input and router selection from kwargs if provided
             user_input = kwargs.get("user_input")
             router_selection = kwargs.get("router_selection")
+
+            # Local references for easier access within the loop
+            collected_step_outputs = state.collected_step_outputs
+            previous_step_outputs = state.previous_step_outputs
+            shared_images = state.shared_images
+            shared_videos = state.shared_videos
+            shared_audio = state.shared_audio
+            shared_files = state.shared_files
+            output_images = state.output_images
+            output_videos = state.output_videos
+            output_audio = state.output_audio
+            output_files = state.output_files
 
             # Continue from the paused step
             for i, step in enumerate(self.steps[start_step_index:], start=start_step_index):  # type: ignore[arg-type, index]
@@ -4843,36 +4829,12 @@ class Workflow:
                     logger.info(f"Early termination requested by step {step_name}")
                     break
 
-            # Update the workflow_run_response with completion data
-            if collected_step_outputs:
-                if workflow_run_response.metrics:
-                    workflow_run_response.metrics.stop_timer()
-
-                workflow_run_response.metrics = self._aggregate_workflow_metrics(
-                    collected_step_outputs,
-                    workflow_run_response.metrics,  # type: ignore[arg-type]
-                )
-                last_output = cast(StepOutput, collected_step_outputs[-1])
-
-                if getattr(last_output, "steps", None):
-                    _cur = last_output
-                    while getattr(_cur, "steps", None):
-                        _steps = _cur.steps or []
-                        if not _steps:
-                            break
-                        _cur = _steps[-1]
-                    workflow_run_response.content = _cur.content
-                else:
-                    workflow_run_response.content = last_output.content
-            else:
-                workflow_run_response.content = "No steps executed"
-
-            workflow_run_response.step_results = collected_step_outputs
-            workflow_run_response.images = output_images
-            workflow_run_response.videos = output_videos
-            workflow_run_response.audio = output_audio
-            workflow_run_response.status = RunStatus.completed
-            workflow_run_response._paused_step_index = None
+            # Finalize workflow completion
+            workflow_run_response.metrics = self._aggregate_workflow_metrics(
+                state.collected_step_outputs,
+                workflow_run_response.metrics,  # type: ignore[arg-type]
+            )
+            finalize_workflow_completion(workflow_run_response, state)
 
         except RunCancelledException as e:
             logger.info(f"Workflow run {workflow_run_response.run_id} was cancelled")
@@ -4910,35 +4872,20 @@ class Workflow:
     ) -> Iterator[WorkflowRunOutputEvent]:
         """Continue executing a workflow from a specific step index with streaming."""
         try:
-            # Restore previous step outputs from step_results
-            collected_step_outputs: List[Union[StepOutput, List[StepOutput]]] = list(
-                workflow_run_response.step_results or []
-            )
-            previous_step_outputs: Dict[str, StepOutput] = {}
-            for step_output in collected_step_outputs:
-                if isinstance(step_output, StepOutput) and step_output.step_name:
-                    previous_step_outputs[step_output.step_name] = step_output
+            # Initialize execution state (restores step outputs and media from previous execution)
+            state = ContinueExecutionState(workflow_run_response, execution_input)
 
-            shared_images: List[Image] = execution_input.images or []
-            output_images: List[Image] = (execution_input.images or []).copy()
-            shared_videos: List[Video] = execution_input.videos or []
-            output_videos: List[Video] = (execution_input.videos or []).copy()
-            shared_audio: List[Audio] = execution_input.audio or []
-            output_audio: List[Audio] = (execution_input.audio or []).copy()
-            shared_files: List[File] = execution_input.files or []
-            output_files: List[File] = (execution_input.files or []).copy()
-
-            # Restore shared media from previous steps
-            for step_output in collected_step_outputs:
-                if isinstance(step_output, StepOutput):
-                    shared_images.extend(step_output.images or [])
-                    shared_videos.extend(step_output.videos or [])
-                    shared_audio.extend(step_output.audio or [])
-                    shared_files.extend(step_output.files or [])
-                    output_images.extend(step_output.images or [])
-                    output_videos.extend(step_output.videos or [])
-                    output_audio.extend(step_output.audio or [])
-                    output_files.extend(step_output.files or [])
+            # Local references for easier access within the loop
+            collected_step_outputs = state.collected_step_outputs
+            previous_step_outputs = state.previous_step_outputs
+            shared_images = state.shared_images
+            shared_videos = state.shared_videos
+            shared_audio = state.shared_audio
+            shared_files = state.shared_files
+            output_images = state.output_images
+            output_videos = state.output_videos
+            output_audio = state.output_audio
+            output_files = state.output_files
 
             early_termination = False
 
@@ -5241,36 +5188,12 @@ class Workflow:
                 if early_termination:
                     break
 
-            # Update the workflow_run_response with completion data
-            if collected_step_outputs:
-                if workflow_run_response.metrics:
-                    workflow_run_response.metrics.stop_timer()
-
-                workflow_run_response.metrics = self._aggregate_workflow_metrics(
-                    collected_step_outputs,
-                    workflow_run_response.metrics,  # type: ignore[arg-type]
-                )
-                last_output = cast(StepOutput, collected_step_outputs[-1])
-
-                if getattr(last_output, "steps", None):
-                    _cur = last_output
-                    while getattr(_cur, "steps", None):
-                        _steps = _cur.steps or []
-                        if not _steps:
-                            break
-                        _cur = _steps[-1]
-                    workflow_run_response.content = _cur.content
-                else:
-                    workflow_run_response.content = last_output.content
-            else:
-                workflow_run_response.content = "No steps executed"
-
-            workflow_run_response.step_results = collected_step_outputs
-            workflow_run_response.images = output_images
-            workflow_run_response.videos = output_videos
-            workflow_run_response.audio = output_audio
-            workflow_run_response.status = RunStatus.completed
-            workflow_run_response._paused_step_index = None
+            # Finalize workflow completion
+            workflow_run_response.metrics = self._aggregate_workflow_metrics(
+                state.collected_step_outputs,
+                workflow_run_response.metrics,  # type: ignore[arg-type]
+            )
+            finalize_workflow_completion(workflow_run_response, state)
 
         except RunCancelledException as e:
             logger.info(f"Workflow run {workflow_run_response.run_id} was cancelled")
@@ -5588,35 +5511,20 @@ class Workflow:
     ) -> WorkflowRunOutput:
         """Continue executing a workflow from a specific step index (async version)."""
         try:
-            # Restore previous step outputs from step_results
-            collected_step_outputs: List[Union[StepOutput, List[StepOutput]]] = list(
-                workflow_run_response.step_results or []
-            )
-            previous_step_outputs: Dict[str, StepOutput] = {}
-            for step_output in collected_step_outputs:
-                if isinstance(step_output, StepOutput) and step_output.step_name:
-                    previous_step_outputs[step_output.step_name] = step_output
+            # Initialize execution state (restores step outputs and media from previous execution)
+            state = ContinueExecutionState(workflow_run_response, execution_input)
 
-            shared_images: List[Image] = execution_input.images or []
-            output_images: List[Image] = (execution_input.images or []).copy()
-            shared_videos: List[Video] = execution_input.videos or []
-            output_videos: List[Video] = (execution_input.videos or []).copy()
-            shared_audio: List[Audio] = execution_input.audio or []
-            output_audio: List[Audio] = (execution_input.audio or []).copy()
-            shared_files: List[File] = execution_input.files or []
-            output_files: List[File] = (execution_input.files or []).copy()
-
-            # Restore shared media from previous steps
-            for step_output in collected_step_outputs:
-                if isinstance(step_output, StepOutput):
-                    shared_images.extend(step_output.images or [])
-                    shared_videos.extend(step_output.videos or [])
-                    shared_audio.extend(step_output.audio or [])
-                    shared_files.extend(step_output.files or [])
-                    output_images.extend(step_output.images or [])
-                    output_videos.extend(step_output.videos or [])
-                    output_audio.extend(step_output.audio or [])
-                    output_files.extend(step_output.files or [])
+            # Local references for easier access within the loop
+            collected_step_outputs = state.collected_step_outputs
+            previous_step_outputs = state.previous_step_outputs
+            shared_images = state.shared_images
+            shared_videos = state.shared_videos
+            shared_audio = state.shared_audio
+            shared_files = state.shared_files
+            output_images = state.output_images
+            output_videos = state.output_videos
+            output_audio = state.output_audio
+            output_files = state.output_files
 
             # Get user input and router selection from kwargs if provided
             user_input = kwargs.get("user_input")
@@ -5803,36 +5711,12 @@ class Workflow:
                     logger.info(f"Early termination requested by step {step_name}")
                     break
 
-            # Update the workflow_run_response with completion data
-            if collected_step_outputs:
-                if workflow_run_response.metrics:
-                    workflow_run_response.metrics.stop_timer()
-
-                workflow_run_response.metrics = self._aggregate_workflow_metrics(
-                    collected_step_outputs,
-                    workflow_run_response.metrics,  # type: ignore[arg-type]
-                )
-                last_output = cast(StepOutput, collected_step_outputs[-1])
-
-                if getattr(last_output, "steps", None):
-                    _cur = last_output
-                    while getattr(_cur, "steps", None):
-                        _steps = _cur.steps or []
-                        if not _steps:
-                            break
-                        _cur = _steps[-1]
-                    workflow_run_response.content = _cur.content
-                else:
-                    workflow_run_response.content = last_output.content
-            else:
-                workflow_run_response.content = "No steps executed"
-
-            workflow_run_response.step_results = collected_step_outputs
-            workflow_run_response.images = output_images
-            workflow_run_response.videos = output_videos
-            workflow_run_response.audio = output_audio
-            workflow_run_response.status = RunStatus.completed
-            workflow_run_response._paused_step_index = None
+            # Finalize workflow completion
+            workflow_run_response.metrics = self._aggregate_workflow_metrics(
+                state.collected_step_outputs,
+                workflow_run_response.metrics,  # type: ignore[arg-type]
+            )
+            finalize_workflow_completion(workflow_run_response, state)
 
         except RunCancelledException as e:
             logger.info(f"Workflow run {workflow_run_response.run_id} was cancelled")
@@ -5870,35 +5754,20 @@ class Workflow:
     ) -> AsyncIterator[WorkflowRunOutputEvent]:
         """Continue executing a workflow from a specific step index with streaming (async version)."""
         try:
-            # Restore previous step outputs from step_results
-            collected_step_outputs: List[Union[StepOutput, List[StepOutput]]] = list(
-                workflow_run_response.step_results or []
-            )
-            previous_step_outputs: Dict[str, StepOutput] = {}
-            for step_output in collected_step_outputs:
-                if isinstance(step_output, StepOutput) and step_output.step_name:
-                    previous_step_outputs[step_output.step_name] = step_output
+            # Initialize execution state (restores step outputs and media from previous execution)
+            state = ContinueExecutionState(workflow_run_response, execution_input)
 
-            shared_images: List[Image] = execution_input.images or []
-            output_images: List[Image] = (execution_input.images or []).copy()
-            shared_videos: List[Video] = execution_input.videos or []
-            output_videos: List[Video] = (execution_input.videos or []).copy()
-            shared_audio: List[Audio] = execution_input.audio or []
-            output_audio: List[Audio] = (execution_input.audio or []).copy()
-            shared_files: List[File] = execution_input.files or []
-            output_files: List[File] = (execution_input.files or []).copy()
-
-            # Restore shared media from previous steps
-            for step_output in collected_step_outputs:
-                if isinstance(step_output, StepOutput):
-                    shared_images.extend(step_output.images or [])
-                    shared_videos.extend(step_output.videos or [])
-                    shared_audio.extend(step_output.audio or [])
-                    shared_files.extend(step_output.files or [])
-                    output_images.extend(step_output.images or [])
-                    output_videos.extend(step_output.videos or [])
-                    output_audio.extend(step_output.audio or [])
-                    output_files.extend(step_output.files or [])
+            # Local references for easier access within the loop
+            collected_step_outputs = state.collected_step_outputs
+            previous_step_outputs = state.previous_step_outputs
+            shared_images = state.shared_images
+            shared_videos = state.shared_videos
+            shared_audio = state.shared_audio
+            shared_files = state.shared_files
+            output_images = state.output_images
+            output_videos = state.output_videos
+            output_audio = state.output_audio
+            output_files = state.output_files
 
             early_termination = False
 
@@ -6203,36 +6072,12 @@ class Workflow:
                 if early_termination:
                     break
 
-            # Update the workflow_run_response with completion data
-            if collected_step_outputs:
-                if workflow_run_response.metrics:
-                    workflow_run_response.metrics.stop_timer()
-
-                workflow_run_response.metrics = self._aggregate_workflow_metrics(
-                    collected_step_outputs,
-                    workflow_run_response.metrics,  # type: ignore[arg-type]
-                )
-                last_output = cast(StepOutput, collected_step_outputs[-1])
-
-                if getattr(last_output, "steps", None):
-                    _cur = last_output
-                    while getattr(_cur, "steps", None):
-                        _steps = _cur.steps or []
-                        if not _steps:
-                            break
-                        _cur = _steps[-1]
-                    workflow_run_response.content = _cur.content
-                else:
-                    workflow_run_response.content = last_output.content
-            else:
-                workflow_run_response.content = "No steps executed"
-
-            workflow_run_response.step_results = collected_step_outputs
-            workflow_run_response.images = output_images
-            workflow_run_response.videos = output_videos
-            workflow_run_response.audio = output_audio
-            workflow_run_response.status = RunStatus.completed
-            workflow_run_response._paused_step_index = None
+            # Finalize workflow completion
+            workflow_run_response.metrics = self._aggregate_workflow_metrics(
+                state.collected_step_outputs,
+                workflow_run_response.metrics,  # type: ignore[arg-type]
+            )
+            finalize_workflow_completion(workflow_run_response, state)
 
         except RunCancelledException as e:
             logger.info(f"Workflow run {workflow_run_response.run_id} was cancelled")
