@@ -67,11 +67,15 @@ class S3Config(BaseStorageConfig):
     ) -> ListFilesResult:
         """List files and folders in this S3 source with pagination.
 
+        Uses S3's native continuation-token pagination to avoid loading all
+        objects into memory. Only fetches the objects needed for the requested
+        page (plus objects to skip for earlier pages).
+
         Args:
             prefix: Path prefix to filter files (e.g., "reports/2024/").
                     Overrides the config's prefix when provided.
             delimiter: Folder delimiter (default "/")
-            limit: Max files to return per request (1-1000)
+            limit: Max files to return per request (1-1000, clamped)
             page: Page number (1-indexed)
 
         Returns:
@@ -81,6 +85,8 @@ class S3Config(BaseStorageConfig):
             import boto3
         except ImportError:
             raise ImportError("The `boto3` package is not installed. Please install it via `pip install boto3`.")
+
+        limit = max(1, min(limit, 1000))
 
         # Build session kwargs
         session_kwargs = {}
@@ -99,24 +105,29 @@ class S3Config(BaseStorageConfig):
         # Use provided prefix or fall back to config prefix
         effective_prefix = prefix if prefix is not None else (self.prefix or "")
 
-        # Collect all files and folders using the paginator.
-        # We use the paginator to handle S3's 1000-key-per-response limit,
-        # then do offset-based pagination in memory.
-        all_files = []
-        folders = []
+        # Number of file objects to skip for pages before the requested one
+        skip_count = (page - 1) * limit
+        skipped = 0
+        collected: list = []
+        folders: list = []
         folders_seen = False
+        total_count = 0
+        has_more = False
 
-        paginator = s3_client.get_paginator("list_objects_v2")
-        paginate_kwargs = {"Bucket": self.bucket_name}
+        # Use list_objects_v2 directly with continuation tokens to avoid
+        # loading all objects into memory.
+        list_kwargs: dict = {"Bucket": self.bucket_name, "MaxKeys": 1000}
         if effective_prefix:
-            paginate_kwargs["Prefix"] = effective_prefix
+            list_kwargs["Prefix"] = effective_prefix
         if delimiter:
-            paginate_kwargs["Delimiter"] = delimiter
+            list_kwargs["Delimiter"] = delimiter
 
-        for response_page in paginator.paginate(**paginate_kwargs):
-            # Collect folders from first response page only
+        while True:
+            response = s3_client.list_objects_v2(**list_kwargs)
+
+            # Collect folders from first response only
             if not folders_seen:
-                for prefix_obj in response_page.get("CommonPrefixes", []):
+                for prefix_obj in response.get("CommonPrefixes", []):
                     folder_prefix = prefix_obj.get("Prefix", "")
                     folder_name = folder_prefix.rstrip("/").rsplit("/", 1)[-1]
                     if folder_name:
@@ -129,37 +140,59 @@ class S3Config(BaseStorageConfig):
                         )
                 folders_seen = True
 
-            # Collect files
-            for obj in response_page.get("Contents", []):
+            # Process file objects
+            for obj in response.get("Contents", []):
                 key = obj.get("Key", "")
                 if key == effective_prefix:
                     continue
                 name = key.rsplit("/", 1)[-1] if "/" in key else key
                 if not name:
                     continue
-                all_files.append(
-                    {
-                        "key": key,
-                        "name": name,
-                        "size": obj.get("Size"),
-                        "last_modified": obj.get("LastModified"),
-                        "content_type": mimetypes.guess_type(name)[0],
-                    }
-                )
 
-        # Offset-based pagination
-        total_count = len(all_files)
-        total_pages = (total_count + limit - 1) // limit if limit > 0 else 0
-        start_idx = (page - 1) * limit
-        end_idx = start_idx + limit
-        page_files = all_files[start_idx:end_idx]
+                total_count += 1
+
+                # Skip objects for earlier pages
+                if skipped < skip_count:
+                    skipped += 1
+                    continue
+
+                # Collect objects for the requested page
+                if len(collected) < limit:
+                    collected.append(
+                        {
+                            "key": key,
+                            "name": name,
+                            "size": obj.get("Size"),
+                            "last_modified": obj.get("LastModified"),
+                            "content_type": mimetypes.guess_type(name)[0],
+                        }
+                    )
+
+            # Check if there are more pages from S3
+            if response.get("IsTruncated"):
+                list_kwargs["ContinuationToken"] = response["NextContinuationToken"]
+                # If we already have enough items, count remaining for total_count
+                # but cap the counting to avoid iterating forever on huge buckets
+                if len(collected) >= limit:
+                    has_more = True
+                    break
+            else:
+                break
+
+        # If we broke out early, we don't know the exact total —
+        # indicate there are more pages available
+        if has_more:
+            # We know at least this many exist; signal "more available"
+            total_pages = page + 1
+        else:
+            total_pages = (total_count + limit - 1) // limit if limit > 0 else 0
 
         # Only include folders on first page
         if page > 1:
             folders = []
 
         return ListFilesResult(
-            files=page_files,
+            files=collected,
             folders=folders,
             page=page,
             limit=limit,

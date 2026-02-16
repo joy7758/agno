@@ -261,19 +261,59 @@ class BackupStorage:
     # LOCAL BACKUP STORAGE
     # ==========================================
 
+    def _safe_local_path(self, config: LocalStorageConfig, content_id: str, filename: str) -> tuple:
+        """Build a local file path and validate it stays within base_path.
+
+        Strips directory components from filename to prevent path traversal.
+
+        Returns:
+            Tuple of (resolved_file_path, resolved_dir_path)
+        """
+        from pathlib import Path
+
+        # Strip directory components — only keep the leaf name
+        safe_filename = Path(filename).name
+        if not safe_filename:
+            safe_filename = "content"
+
+        if self.knowledge_id:
+            dir_path = os.path.join(config.base_path, self.knowledge_id, content_id)
+        else:
+            dir_path = os.path.join(config.base_path, content_id)
+
+        file_path = os.path.join(dir_path, safe_filename)
+
+        # Resolve and verify the path is inside base_path
+        resolved = Path(file_path).resolve()
+        base_resolved = Path(config.base_path).resolve()
+        if not resolved.is_relative_to(base_resolved):
+            raise ValueError(f"Path traversal detected: {filename!r} resolves outside base_path")
+
+        return str(resolved), str(Path(dir_path).resolve())
+
+    def _validate_local_fetch_path(self, file_path: str) -> str:
+        """Validate that a stored backup path is within the configured base_path."""
+        from pathlib import Path
+
+        config = self.storage_config
+        if not isinstance(config, LocalStorageConfig):
+            raise ValueError("Storage config is not LocalStorageConfig")
+
+        resolved = Path(file_path).resolve()
+        base_resolved = Path(config.base_path).resolve()
+        if not resolved.is_relative_to(base_resolved):
+            raise ValueError("Path traversal detected: path resolves outside base_path")
+
+        return str(resolved)
+
     def _store_to_local(self, content_id: str, filename: str, file_data: bytes) -> Dict[str, Any]:
         """Store backup content to local filesystem."""
         config = self.storage_config
         if not isinstance(config, LocalStorageConfig):
             raise ValueError("Storage config is not LocalStorageConfig")
 
-        # Build local path: {base_path}/{knowledge_id}/{content_id}/{filename}
-        if self.knowledge_id:
-            dir_path = os.path.join(config.base_path, self.knowledge_id, content_id)
-        else:
-            dir_path = os.path.join(config.base_path, content_id)
+        file_path, dir_path = self._safe_local_path(config, content_id, filename)
         os.makedirs(dir_path, exist_ok=True)
-        file_path = os.path.join(dir_path, filename)
 
         with open(file_path, "wb") as f:
             f.write(file_data)
@@ -294,12 +334,8 @@ class BackupStorage:
         if not isinstance(config, LocalStorageConfig):
             raise ValueError("Storage config is not LocalStorageConfig")
 
-        if self.knowledge_id:
-            dir_path = os.path.join(config.base_path, self.knowledge_id, content_id)
-        else:
-            dir_path = os.path.join(config.base_path, content_id)
+        file_path, dir_path = self._safe_local_path(config, content_id, filename)
         os.makedirs(dir_path, exist_ok=True)
-        file_path = os.path.join(dir_path, filename)
 
         async with aiofiles.open(file_path, "wb") as f:
             await f.write(file_data)
@@ -318,6 +354,8 @@ class BackupStorage:
         if not file_path:
             raise ValueError("Missing backup_storage_path in metadata")
 
+        file_path = self._validate_local_fetch_path(file_path)
+
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Backup file not found: {file_path}")
 
@@ -331,6 +369,8 @@ class BackupStorage:
         file_path = agno_metadata.get("backup_storage_path")
         if not file_path:
             raise ValueError("Missing backup_storage_path in metadata")
+
+        file_path = self._validate_local_fetch_path(file_path)
 
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Backup file not found: {file_path}")
