@@ -19,7 +19,6 @@ from agno.utils.media import (
 if TYPE_CHECKING:
     from agno.workflow.types import (
         ErrorRequirement,
-        RouterRequirement,
         StepOutput,
         StepRequirement,
         WorkflowMetrics,
@@ -27,8 +26,6 @@ if TYPE_CHECKING:
 else:
     StepOutput = Any
     StepRequirement = Any
-    RouterRequirement = Any
-    ConditionRequirement = Any
     ErrorRequirement = Any
     WorkflowMetrics = Any
 
@@ -582,11 +579,9 @@ class WorkflowRunOutput:
 
     status: RunStatus = RunStatus.pending
 
-    # Step-level HITL requirements to continue a paused workflow
+    # Unified HITL requirements to continue a paused workflow
+    # Handles all HITL types: confirmation, user input, and route selection
     step_requirements: Optional[List["StepRequirement"]] = None
-
-    # Router-level HITL requirements for user-driven routing
-    router_requirements: Optional[List["RouterRequirement"]] = None
 
     # Error-level HITL requirements for handling step failures
     error_requirements: Optional[List["ErrorRequirement"]] = None
@@ -619,24 +614,17 @@ class WorkflowRunOutput:
 
     @property
     def steps_requiring_user_input(self) -> List["StepRequirement"]:
-        """Get step requirements that need user input"""
+        """Get step requirements that need user input (custom fields, not route selection)"""
         if not self.step_requirements:
             return []
         return [req for req in self.step_requirements if req.needs_user_input]
 
     @property
-    def active_router_requirements(self) -> List["RouterRequirement"]:
-        """Get router requirements that still need user selection"""
-        if not self.router_requirements:
+    def steps_requiring_route_selection(self) -> List["StepRequirement"]:
+        """Get step requirements that need route selection (Router HITL)"""
+        if not self.step_requirements:
             return []
-        return [req for req in self.router_requirements if not req.is_resolved]
-
-    @property
-    def routers_requiring_selection(self) -> List["RouterRequirement"]:
-        """Get routers that need user to select a route"""
-        if not self.router_requirements:
-            return []
-        return [req for req in self.router_requirements if req.needs_selection]
+        return [req for req in self.step_requirements if req.needs_route_selection]
 
     @property
     def active_error_requirements(self) -> List["ErrorRequirement"]:
@@ -670,7 +658,6 @@ class WorkflowRunOutput:
                 "metrics",
                 "workflow_agent_run",
                 "step_requirements",
-                "router_requirements",
                 "error_requirements",
                 "_paused_step_index",
             ]
@@ -728,9 +715,6 @@ class WorkflowRunOutput:
 
         if self.step_requirements is not None:
             _dict["step_requirements"] = [req.to_dict() for req in self.step_requirements]
-
-        if self.router_requirements is not None:
-            _dict["router_requirements"] = [req.to_dict() for req in self.router_requirements]
 
         if self.error_requirements is not None:
             _dict["error_requirements"] = [req.to_dict() for req in self.error_requirements]
@@ -812,13 +796,17 @@ class WorkflowRunOutput:
 
             step_requirements = [StepRequirement.from_dict(req) for req in step_requirements_data]
 
-        # Parse router_requirements
+        # Handle legacy router_requirements by converting to step_requirements
         router_requirements_data = data.pop("router_requirements", None)
-        router_requirements = None
         if router_requirements_data:
-            from agno.workflow.types import RouterRequirement
+            from agno.workflow.types import StepRequirement as StepReq
 
-            router_requirements = [RouterRequirement.from_dict(req) for req in router_requirements_data]
+            # Convert legacy router_requirements to step_requirements with requires_route_selection=True
+            router_as_step_reqs = [StepReq.from_dict(req) for req in router_requirements_data]
+            if step_requirements is None:
+                step_requirements = router_as_step_reqs
+            else:
+                step_requirements.extend(router_as_step_reqs)
 
         # Parse error_requirements
         error_requirements_data = data.pop("error_requirements", None)
@@ -850,7 +838,6 @@ class WorkflowRunOutput:
             metrics=workflow_metrics,
             step_executor_runs=step_executor_runs,
             step_requirements=step_requirements,
-            router_requirements=router_requirements,
             error_requirements=error_requirements,
             input=input_data,
             **filtered_data,

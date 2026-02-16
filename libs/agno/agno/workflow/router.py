@@ -17,7 +17,14 @@ from agno.session.workflow import WorkflowSession
 from agno.utils.log import log_debug, logger
 from agno.workflow.cel import CEL_AVAILABLE, evaluate_cel_router_selector, is_cel_expression
 from agno.workflow.step import Step
-from agno.workflow.types import RouterRequirement, StepInput, StepOutput, StepType, UserInputField
+from agno.workflow.types import (
+    OnReject,
+    StepInput,
+    StepOutput,
+    StepRequirement,
+    StepType,
+    UserInputField,
+)
 
 WorkflowSteps = List[
     Union[
@@ -76,20 +83,28 @@ class Router:
     # Router function or CEL expression that selects step(s) to execute (optional if using HITL)
     selector: Optional[
         Union[
-            Callable[[StepInput], Union[WorkflowSteps, List[WorkflowSteps]]],
-            Callable[[StepInput], Awaitable[Union[WorkflowSteps, List[WorkflowSteps]]]],
+        Callable[[StepInput], Union[WorkflowSteps, List[WorkflowSteps]]],
+        Callable[[StepInput], Awaitable[Union[WorkflowSteps, List[WorkflowSteps]]]],
             str,  # CEL expression returning step name
-        ]
+    ]
     ] = None
 
     name: Optional[str] = None
     description: Optional[str] = None
 
-    # HITL parameters for user-driven routing
+    # HITL parameters for user-driven routing (selection mode)
     requires_user_input: bool = False
     user_input_message: Optional[str] = None
     allow_multiple_selections: bool = False  # If True, user can select multiple choices
     user_input_schema: Optional[List[Dict[str, Any]]] = field(default=None)  # Custom schema if needed
+
+    # HITL parameters for confirmation mode
+    # If True, the router will pause and ask for confirmation before executing selected steps
+    # User confirms -> execute the selected steps from selector
+    # User rejects -> skip the router entirely
+    requires_confirmation: bool = False
+    confirmation_message: Optional[str] = None
+    on_reject: Union[OnReject, str] = OnReject.skip
 
     def to_dict(self) -> Dict[str, Any]:
         result: Dict[str, Any] = {
@@ -117,7 +132,72 @@ class Router:
         if self.user_input_schema:
             result["user_input_schema"] = self.user_input_schema
 
+        # Add confirmation HITL fields
+        result["requires_confirmation"] = self.requires_confirmation
+        result["confirmation_message"] = self.confirmation_message
+        result["on_reject"] = str(self.on_reject)
+
         return result
+
+    def create_step_requirement(
+        self,
+        step_index: int,
+        step_input: StepInput,
+        for_route_selection: bool = False,
+    ) -> StepRequirement:
+        """Create a StepRequirement for HITL pause.
+
+        This method handles both:
+        1. Confirmation mode (requires_confirmation=True): Asks user to confirm before executing
+        2. Route selection mode (requires_user_input=True): Asks user to select which routes to execute
+
+        Args:
+            step_index: Index of the router in the workflow.
+            step_input: The prepared input for the router.
+            for_route_selection: If True, creates a requirement for route selection (user chooses routes).
+                                 If False, creates a requirement for confirmation (user confirms execution).
+
+        Returns:
+            StepRequirement configured for this router's HITL needs.
+        """
+        step_name = self.name or f"router_{step_index + 1}"
+
+        if for_route_selection:
+            # Route selection mode - user selects which routes to execute
+            choice_names = self._get_choice_names()
+
+            # Build user input schema for selection (optional, for display purposes)
+            if self.user_input_schema:
+                schema = [UserInputField.from_dict(f) if isinstance(f, dict) else f for f in self.user_input_schema]
+            else:
+                schema = None  # Route selection uses available_choices, not user_input_schema
+
+            return StepRequirement(
+                step_id=str(uuid4()),
+                step_name=step_name,
+                step_index=step_index,
+                step_type="Router",
+                requires_route_selection=True,
+                user_input_message=self.user_input_message or f"Select a route from: {', '.join(choice_names)}",
+                user_input_schema=schema,
+                available_choices=choice_names,
+                allow_multiple_selections=self.allow_multiple_selections,
+                step_input=step_input,
+            )
+        else:
+            # Confirmation mode - user confirms before execution
+            return StepRequirement(
+                step_id=str(uuid4()),
+                step_name=step_name,
+                step_index=step_index,
+                step_type="Router",
+                requires_confirmation=self.requires_confirmation,
+                confirmation_message=self.confirmation_message
+                or f"Execute router '{self.name or 'router'}' with selected steps?",
+                on_reject=self.on_reject.value if isinstance(self.on_reject, OnReject) else str(self.on_reject),
+                requires_user_input=False,
+                step_input=step_input,
+            )
 
     @classmethod
     def from_dict(
@@ -181,6 +261,9 @@ class Router:
             user_input_message=data.get("user_input_message"),
             allow_multiple_selections=data.get("allow_multiple_selections", False),
             user_input_schema=data.get("user_input_schema"),
+            requires_confirmation=data.get("requires_confirmation", False),
+            confirmation_message=data.get("confirmation_message"),
+            on_reject=data.get("on_reject", OnReject.skip),
         )
 
     def _prepare_single_step(self, step: Any) -> Any:
@@ -263,44 +346,6 @@ class Router:
                 logger.warning(f"Router: Unknown choice '{name}', skipping")
 
         return selected_steps
-
-    def create_router_requirement(self, router_id: str, step_input: StepInput) -> RouterRequirement:
-        """Create a RouterRequirement for HITL pause."""
-        choice_names = self._get_choice_names()
-
-        # Build user input schema for selection
-        if self.user_input_schema:
-            schema = [UserInputField.from_dict(f) if isinstance(f, dict) else f for f in self.user_input_schema]
-        else:
-            # Default schema: single selection field
-            schema = [
-                UserInputField(
-                    name="selected_choice",
-                    field_type="str",
-                    description=f"Select from: {', '.join(choice_names)}",
-                    required=True,
-                )
-            ]
-            if self.allow_multiple_selections:
-                schema = [
-                    UserInputField(
-                        name="selected_choices",
-                        field_type="list",
-                        description=f"Select one or more from: {', '.join(choice_names)} (comma-separated)",
-                        required=True,
-                    )
-                ]
-
-        return RouterRequirement(
-            router_id=router_id,
-            router_name=self.name,
-            requires_user_input=True,
-            user_input_message=self.user_input_message or f"Select a route from: {', '.join(choice_names)}",
-            user_input_schema=schema,
-            available_choices=choice_names,
-            allow_multiple_selections=self.allow_multiple_selections,
-            step_input=step_input,
-        )
 
     @property
     def requires_hitl(self) -> bool:

@@ -17,7 +17,7 @@ from agno.session.workflow import WorkflowSession
 from agno.utils.log import log_debug, logger
 from agno.workflow.cel import CEL_AVAILABLE, evaluate_cel_condition_evaluator, is_cel_expression
 from agno.workflow.step import Step
-from agno.workflow.types import StepInput, StepOutput, StepType
+from agno.workflow.types import OnReject, StepInput, StepOutput, StepRequirement, StepType
 
 # Constants for condition branch identifiers
 CONDITION_BRANCH_IF = "if"
@@ -63,6 +63,12 @@ class Condition:
         - 'session_state.retry_count < 3'
         - 'additional_data.priority > 5'
         - 'previous_step_outputs.research.contains("error")'
+
+    HITL Mode:
+        When `requires_confirmation=True`, the workflow pauses before executing the condition
+        and asks the user to confirm which branch to execute:
+        - If user confirms: Execute the `steps` (if branch)
+        - If user rejects: Execute the `else_steps` (else branch) if provided, otherwise skip
     """
 
     # Evaluator should only return boolean
@@ -80,6 +86,16 @@ class Condition:
 
     name: Optional[str] = None
     description: Optional[str] = None
+
+    # Human-in-the-loop (HITL) configuration
+    # If True, the condition will pause before execution and require user confirmation
+    # User confirms -> execute `steps` (if branch)
+    # User rejects -> execute `else_steps` (else branch) if provided, otherwise skip
+    requires_confirmation: bool = False
+    # Message to display to the user when requesting confirmation
+    confirmation_message: Optional[str] = None
+    # What to do when condition is rejected and no else_steps: "skip" or "cancel"
+    on_reject: Union[OnReject, str] = OnReject.skip
 
     def to_dict(self) -> Dict[str, Any]:
         result: Dict[str, Any] = {
@@ -102,7 +118,39 @@ class Condition:
         else:
             raise ValueError(f"Invalid evaluator type: {type(self.evaluator).__name__}")
 
+        # Add HITL fields
+        result["requires_confirmation"] = self.requires_confirmation
+        result["confirmation_message"] = self.confirmation_message
+        result["on_reject"] = str(self.on_reject)
+
         return result
+
+    def create_step_requirement(
+        self,
+        step_index: int,
+        step_input: StepInput,
+    ) -> StepRequirement:
+        """Create a StepRequirement for HITL pause (confirmation).
+
+        Args:
+            step_index: Index of the condition in the workflow.
+            step_input: The prepared input for the condition.
+
+        Returns:
+            StepRequirement configured for this condition's HITL needs.
+        """
+        return StepRequirement(
+            step_id=str(uuid4()),
+            step_name=self.name or f"condition_{step_index + 1}",
+            step_index=step_index,
+            step_type="Condition",
+            requires_confirmation=self.requires_confirmation,
+            confirmation_message=self.confirmation_message
+            or f"Execute condition '{self.name or 'condition'}'? (yes=if branch, no=else branch)",
+            on_reject=self.on_reject.value if isinstance(self.on_reject, OnReject) else str(self.on_reject),
+            requires_user_input=False,
+            step_input=step_input,
+        )
 
     @classmethod
     def from_dict(
@@ -162,6 +210,9 @@ class Condition:
             else_steps=[deserialize_step(step) for step in data.get("else_steps", [])],
             name=data.get("name"),
             description=data.get("description"),
+            requires_confirmation=data.get("requires_confirmation", False),
+            confirmation_message=data.get("confirmation_message"),
+            on_reject=data.get("on_reject", OnReject.skip),
         )
 
     def _prepare_steps(self):

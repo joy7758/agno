@@ -145,8 +145,9 @@ if __name__ == "__main__":
     # Handle HITL pauses
     while run_output.is_paused:
         # Handle Router requirements (user selection)
-        for requirement in run_output.routers_requiring_selection:
-            print(f"\n[DECISION POINT] Router: {requirement.router_name}")
+        # with requires_route_selection=True
+        for requirement in run_output.steps_requiring_route_selection:
+            print(f"\n[DECISION POINT] Router: {requirement.step_name}")
             print(f"[HITL] {requirement.user_input_message}")
 
             # Show available choices

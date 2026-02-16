@@ -582,24 +582,42 @@ class UserInputField:
 
 @dataclass
 class StepRequirement:
-    """Requirement to complete a paused step (used in step-level HITL flows)"""
+    """Unified requirement for all HITL (Human-in-the-Loop) workflow pauses.
+
+    This class handles three types of HITL scenarios:
+    1. **Confirmation**: User confirms or rejects execution (Step, Loop, Condition, Steps, Router)
+    2. **User Input**: User provides custom input values (Step with user_input_schema)
+    3. **Route Selection**: User selects which route(s) to take (Router with requires_user_input)
+
+    The `step_type` field indicates what kind of component created this requirement:
+    - "Step", "Loop", "Condition", "Steps", "Router"
+    """
 
     step_id: str
     step_name: Optional[str] = None
     step_index: Optional[int] = None
 
-    # Confirmation fields
+    # Component type that created this requirement
+    step_type: Optional[str] = None  # "Step", "Loop", "Condition", "Steps", "Router"
+
+    # Confirmation fields (for Step, Loop, Condition, Steps, Router confirmation mode)
     requires_confirmation: bool = False
     confirmation_message: Optional[str] = None
     confirmed: Optional[bool] = None
     # What to do when step is rejected: "skip" (skip step, continue workflow) or "cancel" (cancel workflow)
     on_reject: str = "cancel"
 
-    # User input fields
+    # User input fields (for Step with custom input)
     requires_user_input: bool = False
     user_input_message: Optional[str] = None
     user_input_schema: Optional[List[UserInputField]] = None
     user_input: Optional[Dict[str, Any]] = None  # The actual user input values
+
+    # Route selection fields (for Router user selection mode)
+    requires_route_selection: bool = False
+    available_choices: Optional[List[str]] = None  # Available route names
+    allow_multiple_selections: bool = False  # If True, user can select multiple routes
+    selected_choices: Optional[List[str]] = None  # User's selected route(s)
 
     # The step input that was prepared before pausing
     step_input: Optional["StepInput"] = None
@@ -689,6 +707,23 @@ class StepRequirement:
             return self.user_input.get(field_name)
         return None
 
+    # Route selection methods (for Router)
+    def select(self, *choices: str) -> None:
+        """Select one or more route choices by name."""
+        if not self.allow_multiple_selections and len(choices) > 1:
+            raise ValueError("This router only allows single selection. Use select() with one choice.")
+        self.selected_choices = list(choices)
+
+    def select_single(self, choice: str) -> None:
+        """Select a single route choice by name."""
+        self.selected_choices = [choice]
+
+    def select_multiple(self, choices: List[str]) -> None:
+        """Select multiple route choices by name."""
+        if not self.allow_multiple_selections:
+            raise ValueError("This router does not allow multiple selections.")
+        self.selected_choices = choices
+
     @property
     def needs_confirmation(self) -> bool:
         """Check if this requirement still needs confirmation"""
@@ -711,11 +746,20 @@ class StepRequirement:
         return self.user_input is None or len(self.user_input) == 0
 
     @property
+    def needs_route_selection(self) -> bool:
+        """Check if this requirement still needs route selection"""
+        if not self.requires_route_selection:
+            return False
+        return self.selected_choices is None or len(self.selected_choices) == 0
+
+    @property
     def is_resolved(self) -> bool:
         """Check if this requirement has been resolved"""
         if self.requires_confirmation and self.confirmed is None:
             return False
         if self.requires_user_input and self.needs_user_input:
+            return False
+        if self.requires_route_selection and self.needs_route_selection:
             return False
         return True
 
@@ -725,6 +769,7 @@ class StepRequirement:
             "step_id": self.step_id,
             "step_name": self.step_name,
             "step_index": self.step_index,
+            "step_type": self.step_type,
             "requires_confirmation": self.requires_confirmation,
             "confirmation_message": self.confirmation_message,
             "confirmed": self.confirmed,
@@ -732,6 +777,10 @@ class StepRequirement:
             "requires_user_input": self.requires_user_input,
             "user_input_message": self.user_input_message,
             "user_input": self.user_input,
+            "requires_route_selection": self.requires_route_selection,
+            "available_choices": self.available_choices,
+            "allow_multiple_selections": self.allow_multiple_selections,
+            "selected_choices": self.selected_choices,
         }
         if self.user_input_schema is not None:
             result["user_input_schema"] = [f.to_dict() for f in self.user_input_schema]
@@ -754,6 +803,7 @@ class StepRequirement:
             step_id=data["step_id"],
             step_name=data.get("step_name"),
             step_index=data.get("step_index"),
+            step_type=data.get("step_type"),
             requires_confirmation=data.get("requires_confirmation", False),
             confirmation_message=data.get("confirmation_message"),
             confirmed=data.get("confirmed"),
@@ -762,96 +812,7 @@ class StepRequirement:
             user_input_message=data.get("user_input_message"),
             user_input_schema=user_input_schema,
             user_input=data.get("user_input"),
-            step_input=step_input,
-        )
-
-
-@dataclass
-class RouterRequirement:
-    """Requirement to complete a paused router (used for user-driven routing decisions).
-
-    When a Router has `requires_user_input=True`, it pauses and creates this requirement.
-    The user selects which route(s) to take from the available choices.
-    """
-
-    router_id: str
-    router_name: Optional[str] = None
-
-    # User input for route selection
-    requires_user_input: bool = True
-    user_input_message: Optional[str] = None
-    user_input_schema: Optional[List[UserInputField]] = None
-
-    # Available choices (step names)
-    available_choices: Optional[List[str]] = None
-    allow_multiple_selections: bool = False
-
-    # User's selection
-    selected_choices: Optional[List[str]] = None
-
-    # The step input at the time of pausing
-    step_input: Optional["StepInput"] = None
-
-    def select(self, *choices: str) -> None:
-        """Select one or more choices by name."""
-        if not self.allow_multiple_selections and len(choices) > 1:
-            raise ValueError("This router only allows single selection. Use select() with one choice.")
-        self.selected_choices = list(choices)
-
-    def select_single(self, choice: str) -> None:
-        """Select a single choice by name."""
-        self.selected_choices = [choice]
-
-    def select_multiple(self, choices: List[str]) -> None:
-        """Select multiple choices by name."""
-        if not self.allow_multiple_selections:
-            raise ValueError("This router does not allow multiple selections.")
-        self.selected_choices = choices
-
-    @property
-    def needs_selection(self) -> bool:
-        """Check if this requirement still needs user selection."""
-        return self.selected_choices is None or len(self.selected_choices) == 0
-
-    @property
-    def is_resolved(self) -> bool:
-        """Check if this requirement has been resolved."""
-        return not self.needs_selection
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
-        result: Dict[str, Any] = {
-            "router_id": self.router_id,
-            "router_name": self.router_name,
-            "requires_user_input": self.requires_user_input,
-            "user_input_message": self.user_input_message,
-            "available_choices": self.available_choices,
-            "allow_multiple_selections": self.allow_multiple_selections,
-            "selected_choices": self.selected_choices,
-        }
-        if self.user_input_schema is not None:
-            result["user_input_schema"] = [f.to_dict() for f in self.user_input_schema]
-        if self.step_input is not None:
-            result["step_input"] = self.step_input.to_dict()
-        return result
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "RouterRequirement":
-        """Create RouterRequirement from dictionary."""
-        step_input = None
-        if data.get("step_input"):
-            step_input = StepInput.from_dict(data["step_input"])
-
-        user_input_schema = None
-        if data.get("user_input_schema"):
-            user_input_schema = [UserInputField.from_dict(f) for f in data["user_input_schema"]]
-
-        return cls(
-            router_id=data["router_id"],
-            router_name=data.get("router_name"),
-            requires_user_input=data.get("requires_user_input", True),
-            user_input_message=data.get("user_input_message"),
-            user_input_schema=user_input_schema,
+            requires_route_selection=data.get("requires_route_selection", False),
             available_choices=data.get("available_choices"),
             allow_multiple_selections=data.get("allow_multiple_selections", False),
             selected_choices=data.get("selected_choices"),
