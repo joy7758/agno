@@ -1,7 +1,53 @@
 # Agno Bug Triage — Oldest to Latest
 
-> Systematic deep review of all 129 open bugs, analyzed from oldest to latest.
-> Each bug is traced through the actual codebase on `main`, with conflicting perspectives and a final verdict.
+> Systematic triage of 129 open bugs. Started 129, now 121 open (8 closed).
+> Each bug traced through actual codebase on `main`, with regression tests.
+
+## Progress Summary
+
+| Category | Count | Details |
+|----------|-------|---------|
+| **Closed (verified fixed)** | 8 | #5754, #5173, #5858, #5329, #5334, #6327, #6209 (dupe), #5741 (dupe) |
+| **Deep-analyzed (sessions 1-3)** | 9 | #3964, #3968, #3980, #4184, #4298, #4430, #4540, #4573, #4688 |
+| **NEEDS_TEST (not fixed)** | 3 | #5483 (partial), #5466, #5493 |
+| **PARTIAL (PR doesn't fully fix)** | 5 | #5165, #5827, #5462, #5860, #6533 |
+| **NOT_FIXED (PR doesn't match)** | 20 | See table below |
+| **Remaining untriaged** | 83 | 39 stale + 44 active |
+
+### Remaining Bugs by Component (83 total)
+
+| Component | Count | Key issues |
+|-----------|-------|------------|
+| Team | 14 | Delegation failures, empty responses, session conflicts |
+| Tools | 10 | CustomEvent mixing, tool parsing, HITL flows |
+| PostgreSQL/DB | 7 | Serialization (SessionSummary, datetime), session bloat |
+| AGUI/AG-UI | 6 | Event ordering, token doubling, deps injection |
+| MCP | 4 | Concurrency, CancelledError, reconnection |
+| Gemini | 4 | Empty payloads, intermittent 400s |
+| Bedrock | 3 | toolResult matching, parallel calls, parsed output |
+| Knowledge/RAG | 3 | LanceDB errors, search not triggered |
+| Workflow | 3 | Events muted, no content output |
+| Memory | 2 | VRAM leak, identity fields |
+| Other | 27 | Misc (thinking tags, OpenAILike, citations, etc.) |
+
+### Notable Duplicate Chains
+
+- **Session storage growth**: #3980 → #5741 (closed) → #5838 (different root cause, open)
+- **CustomEvent in tool output**: #5483 → #6209 (closed as dupe)
+- **Datetime serialization**: #6327 (closed) → #5729 (different path, open) → #6400 (SessionSummary, open)
+- **Metrics double-counting**: #5444 (Anthropic) ↔ #6264 (Gemini) — fix on feature branch, not main
+
+### Regression Tests Written
+
+| Test File | Bug | What it guards |
+|-----------|-----|----------------|
+| `tests/unit/tools/test_tavily_include_answer.py` | #5754 | No `include_answer` in `get_search_context()` |
+| `tests/unit/vectordb/test_milvus_search_params.py` | #5173 | `search_params` kwarg in Milvus search/async_search |
+| `tests/unit/tools/test_crawl4ai_proxy.py` | #5858 | `proxy_config` in Crawl4aiTools |
+| `tests/unit/models/openai/test_openrouter_reasoning_content.py` | #5329 | `.reasoning` attribute fallback |
+| `tests/unit/os/test_agentos_mcp_lifespan.py` | #5334 | No `mcp_lifespan` in `_make_app` |
+| `tests/unit/run/test_run_requirement_datetime_serialization.py` | #6327 | datetime → ISO string in to_dict/from_dict |
+| `tests/unit/team/test_delegate_no_early_break.py` | #4688 | No `break` in async for loops |
 
 ---
 
