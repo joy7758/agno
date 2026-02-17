@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
 
@@ -122,34 +122,15 @@ def attach_routes(
             start_time_ms = time.time() * 1000
             offset = (page - 1) * limit
 
+            # Exclude components whose IDs are owned by the registry
+            exclude_ids = registry.get_all_component_ids() if registry else None
+
             components, total_count = db.list_components(
                 component_type=DbComponentType(component_type.value) if component_type else None,
                 limit=limit,
                 offset=offset,
+                exclude_component_ids=exclude_ids or None,
             )
-
-            # Filter out agents/teams that exist in registry (registry takes precedence)
-            if registry:
-                registry_component_ids: Set[Tuple[str, str]] = set()
-                for a in getattr(registry, "agents", []) or []:
-                    aid = getattr(a, "id", None)
-                    if aid:
-                        registry_component_ids.add(("agent", aid))
-                for t in getattr(registry, "teams", []) or []:
-                    tid = getattr(t, "id", None)
-                    if tid:
-                        registry_component_ids.add(("team", tid))
-
-                if registry_component_ids:
-                    pre_filter_count = len(components)
-                    components = [
-                        c
-                        for c in components
-                        if (c.get("component_type"), c.get("component_id")) not in registry_component_ids
-                    ]
-                    # Adjust total_count by the number of items filtered from this page.
-                    # Not perfectly accurate across all pages, but avoids fetching the entire table.
-                    total_count -= pre_filter_count - len(components)
 
             total_pages = (total_count + limit - 1) // limit if limit > 0 else 0
 

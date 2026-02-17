@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Type
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -92,3 +92,19 @@ class Registry:
         if self.teams:
             return next((t for t in self.teams if getattr(t, "id", None) == team_id), None)
         return None
+
+    def get_agent_ids(self) -> Set[str]:
+        """Get the set of all agent IDs in this registry."""
+        if self.agents:
+            return {getattr(a, "id", None) for a in self.agents if getattr(a, "id", None)} - {None}
+        return set()
+
+    def get_team_ids(self) -> Set[str]:
+        """Get the set of all team IDs in this registry."""
+        if self.teams:
+            return {getattr(t, "id", None) for t in self.teams if getattr(t, "id", None)} - {None}
+        return set()
+
+    def get_all_component_ids(self) -> Set[str]:
+        """Get the set of all agent and team IDs in this registry."""
+        return self.get_agent_ids() | self.get_team_ids()
