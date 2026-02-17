@@ -39,7 +39,7 @@ Agno gives you the primitives, execution engine, and production runtime to handl
 
 Agentic software introduces three fundamental shifts.
 
-#### 1. A new interaction model
+### 1. A new interaction model
 
 Traditional software receives a request and returns a response.
 
@@ -47,7 +47,7 @@ Agents stream reasoning, tool calls, and results in real time. They can pause mi
 
 Agno treats streaming and long-running execution as first-class behavior.
 
-#### 2. A new governance model
+### 2. A new governance model
 
 Traditional systems execute predefined decision logic written in advance.
 
@@ -60,7 +60,7 @@ Agno lets you define who decides what as part of the agent definition, with:
 - Audit logs
 - Enforcement at runtime
 
-#### 3. A new trust model
+### 3. A new trust model
 
 Traditional systems are designed to be predictable. Every execution path is defined in advance.
 
