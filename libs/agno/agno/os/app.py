@@ -560,14 +560,18 @@ class AgentOS:
             self.registry = Registry()
 
         if self.agents:
+            existing_agent_ids = {getattr(a, "id", None) for a in self.registry.agents}
             for agent in self.agents:
-                if not isinstance(agent, RemoteAgent) and agent not in self.registry.agents:
+                if not isinstance(agent, RemoteAgent) and getattr(agent, "id", None) not in existing_agent_ids:
                     self.registry.agents.append(agent)
+                    existing_agent_ids.add(getattr(agent, "id", None))
 
         if self.teams:
+            existing_team_ids = {getattr(t, "id", None) for t in self.registry.teams}
             for team in self.teams:
-                if not isinstance(team, RemoteTeam) and team not in self.registry.teams:
+                if not isinstance(team, RemoteTeam) and getattr(team, "id", None) not in existing_team_ids:
                     self.registry.teams.append(team)
+                    existing_team_ids.add(getattr(team, "id", None))
 
     def _setup_tracing(self) -> None:
         """Set up OpenTelemetry tracing for this AgentOS.
