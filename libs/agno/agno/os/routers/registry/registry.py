@@ -444,6 +444,7 @@ def attach_routes(router: APIRouter, registry: Registry) -> APIRouter:
                 resources.append(
                     RegistryContentResponse(
                         name=agent_name,
+                        id=agent_id,
                         type=RegistryResourceType.AGENT,
                         description=_safe_str(getattr(agent, "description", None)),
                         metadata={
@@ -461,6 +462,7 @@ def attach_routes(router: APIRouter, registry: Registry) -> APIRouter:
                 resources.append(
                     RegistryContentResponse(
                         name=team_name,
+                        id=team_id,
                         type=RegistryResourceType.TEAM,
                         description=_safe_str(getattr(team, "description", None)),
                         metadata={

@@ -734,5 +734,6 @@ RegistryMetadata = Union[
 class RegistryContentResponse(BaseModel):
     name: str
     type: RegistryResourceType
+    id: Optional[str] = None
     description: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
