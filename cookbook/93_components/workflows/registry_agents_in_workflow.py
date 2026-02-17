@@ -45,7 +45,7 @@ writer_agent = Agent(
 )
 
 # AgentOS auto-populates its registry with these agents.
-# The /registry?component_type=agent endpoint exposes them to the UI.
+# The /registry?resource_type=agent endpoint exposes them to the UI.
 # Workflows built in the UI that reference these agents by ID will
 # resolve them from the registry when loaded from DB.
 agent_os = AgentOS(

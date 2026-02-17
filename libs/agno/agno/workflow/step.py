@@ -181,6 +181,11 @@ class Step:
 
                 agent = get_agent_by_id(db=db, id=agent_id, registry=registry)
 
+            if agent is None and agent_id:
+                log_warning(
+                    f"Could not resolve agent_id='{agent_id}' from registry or DB for step '{config.get('name')}'"
+                )
+
         # --- Handle Team reconstruction ---
         if "team_id" in config and config["team_id"]:
             team_id = config.get("team_id")
@@ -197,6 +202,11 @@ class Step:
                 from agno.team.team import get_team_by_id
 
                 team = get_team_by_id(db=db, id=team_id, registry=registry)
+
+            if team is None and team_id:
+                log_warning(
+                    f"Could not resolve team_id='{team_id}' from registry or DB for step '{config.get('name')}'"
+                )
 
         # --- Handle Executor reconstruction ---
         if "executor_ref" in config and config["executor_ref"] and registry:
