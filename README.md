@@ -31,8 +31,8 @@ Agno gives you the primitives, execution engine, and production runtime to handl
 
 | Layer | What it does |
 |-------|--------------|
-| **SDK** | The primitives: agents, teams, workflows, memory, knowledge, tools, guardrails, governance, approval flows. |
-| **Engine** | The agent loop: model calls, tool execution, context management, runtime checks, guardrail enforcement. |
+| **SDK** | The primitives: agents, teams, workflows, memory, knowledge, tools, guardrails, approval flows. |
+| **Engine** | The agent loop: model calls, tool execution, context management, runtime checks. |
 | **AgentOS** | The production runtime: streaming APIs, authentication, per-request isolation, approval enforcement, background execution, and a [control plane](https://os.agno.com) to monitor and manage everything. |
 
 ## Why Agno?
