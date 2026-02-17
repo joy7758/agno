@@ -440,7 +440,7 @@ def attach_routes(router: APIRouter, registry: Registry) -> APIRouter:
         if resource_type is None or resource_type == RegistryResourceType.AGENT:
             for agent in getattr(registry, "agents", []) or []:
                 agent_id = getattr(agent, "id", None)
-                agent_name = getattr(agent, "name", None) or agent.__class__.__name__
+                agent_name = getattr(agent, "name", None) or agent_id
                 resources.append(
                     RegistryContentResponse(
                         name=agent_name,
@@ -457,7 +457,7 @@ def attach_routes(router: APIRouter, registry: Registry) -> APIRouter:
         if resource_type is None or resource_type == RegistryResourceType.TEAM:
             for team in getattr(registry, "teams", []) or []:
                 team_id = getattr(team, "id", None)
-                team_name = getattr(team, "name", None) or team.__class__.__name__
+                team_name = getattr(team, "name", None) or team_id
                 resources.append(
                     RegistryContentResponse(
                         name=team_name,
