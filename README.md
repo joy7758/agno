@@ -76,13 +76,14 @@ Agno builds trust into the engine itself:
 
 Agno is not a demo framework. It is designed for real systems.
 
-- Streaming APIs out of the box
+- 50+ APIs out of the box
 - Per-user session isolation
 - Stateless, horizontally scalable runtime
 - Approval enforcement at runtime
-- Background execution support
-- Auditability and observability
+- Background execution and scheduler
+- Complete auditability and observability
 - Runs entirely in your cloud
+- Sessions, memory, knowledge, and traces stored in your database
 
 ## Quick Start
 
