@@ -96,13 +96,13 @@ class Registry:
     def get_agent_ids(self) -> Set[str]:
         """Get the set of all agent IDs in this registry."""
         if self.agents:
-            return {getattr(a, "id", None) for a in self.agents if getattr(a, "id", None)} - {None}
+            return {aid for a in self.agents if (aid := getattr(a, "id", None)) is not None}
         return set()
 
     def get_team_ids(self) -> Set[str]:
         """Get the set of all team IDs in this registry."""
         if self.teams:
-            return {getattr(t, "id", None) for t in self.teams if getattr(t, "id", None)} - {None}
+            return {tid for t in self.teams if (tid := getattr(t, "id", None)) is not None}
         return set()
 
     def get_all_component_ids(self) -> Set[str]:
