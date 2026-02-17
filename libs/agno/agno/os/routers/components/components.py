@@ -130,19 +130,22 @@ def attach_routes(
 
             # Filter out agents/teams that exist in registry (registry takes precedence)
             if registry:
-                registry_agent_ids = {
-                    getattr(a, "id", None) for a in getattr(registry, "agents", []) or [] if getattr(a, "id", None)
-                }
-                registry_team_ids = {
-                    getattr(t, "id", None) for t in getattr(registry, "teams", []) or [] if getattr(t, "id", None)
-                }
-                if registry_agent_ids or registry_team_ids:
+                registry_component_ids: set[tuple[str, str]] = set()
+                for a in getattr(registry, "agents", []) or []:
+                    aid = getattr(a, "id", None)
+                    if aid:
+                        registry_component_ids.add(("agent", aid))
+                for t in getattr(registry, "teams", []) or []:
+                    tid = getattr(t, "id", None)
+                    if tid:
+                        registry_component_ids.add(("team", tid))
+
+                if registry_component_ids:
                     pre_filter_count = len(components)
                     components = [
                         c
                         for c in components
-                        if not (c.get("component_type") == "agent" and c.get("component_id") in registry_agent_ids)
-                        and not (c.get("component_type") == "team" and c.get("component_id") in registry_team_ids)
+                        if (c.get("component_type"), c.get("component_id")) not in registry_component_ids
                     ]
                     # Adjust total_count by the number of items filtered from this page.
                     # Not perfectly accurate across all pages, but avoids fetching the entire table.

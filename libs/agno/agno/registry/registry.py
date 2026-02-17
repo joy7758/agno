@@ -5,9 +5,10 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
+from agno.agent import Agent
 from agno.db.base import BaseDb
-from agno.os.schema import Agent, Team
 from agno.models.base import Model
+from agno.team import Team
 from agno.tools.function import Function
 from agno.tools.toolkit import Toolkit
 from agno.vectordb.base import VectorDb
