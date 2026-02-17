@@ -1,17 +1,21 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from functools import cached_property
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type
 from uuid import uuid4
 
 from pydantic import BaseModel
 
-from agno.agent import Agent
 from agno.db.base import BaseDb
 from agno.models.base import Model
-from agno.team import Team
 from agno.tools.function import Function
 from agno.tools.toolkit import Toolkit
 from agno.vectordb.base import VectorDb
+
+if TYPE_CHECKING:
+    from agno.agent import Agent
+    from agno.team import Team
 
 
 @dataclass

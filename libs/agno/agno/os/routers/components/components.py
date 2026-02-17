@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
 
@@ -130,7 +130,7 @@ def attach_routes(
 
             # Filter out agents/teams that exist in registry (registry takes precedence)
             if registry:
-                registry_component_ids: set[tuple[str, str]] = set()
+                registry_component_ids: Set[Tuple[str, str]] = set()
                 for a in getattr(registry, "agents", []) or []:
                     aid = getattr(a, "id", None)
                     if aid:
