@@ -23,7 +23,7 @@
 
 ## What is Agno?
 
-Agno is the OSS stack for building, running, and deploying multi-agent systems.
+Agno is the open-source stack for building, running, and deploying multi-agent systems.
 
 Agentic software operates under a different contract than traditional software.
 Execution is dynamic. Decisions are contextual. Trust must be engineered.
