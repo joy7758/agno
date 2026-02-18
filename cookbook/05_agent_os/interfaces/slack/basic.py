@@ -33,7 +33,7 @@ agent_os = AgentOS(
         Slack(
             agent=basic_agent,
             streaming=False,
-            #reply_to_mentions_only=True,  # The Agent will react only to messages mentioning it
+            reply_to_mentions_only=False
         )
     ],
 )

@@ -71,7 +71,7 @@ def attach_routes(
             event = data["event"]
             if event.get("bot_id") or (event.get("message") or {}).get("bot_id") or event.get("subtype"):
                 pass
-            elif streaming and agent:
+            elif streaming:
                 background_tasks.add_task(_stream_slack_response, data)
             else:
                 background_tasks.add_task(_process_slack_event, event)
@@ -85,11 +85,11 @@ def attach_routes(
             return
 
         channel_type = event.get("channel_type", "")
+        is_dm = channel_type == "im"
+        is_thread = bool(event.get("thread_ts"))
 
-        if not reply_to_mentions_only and event_type == "app_mention":
-            return
-
-        if reply_to_mentions_only and event_type == "message" and channel_type != "im":
+        # In channels: only respond to @mentions or thread replies, skip top-level messages
+        if reply_to_mentions_only and event_type == "message" and not is_dm and not is_thread:
             return
 
         message_text = event.get("text", "")
@@ -168,6 +168,14 @@ def attach_routes(
         if event_type not in ("app_mention", "message"):
             return
 
+        channel_type = event.get("channel_type", "")
+        is_dm = channel_type == "im"
+        is_thread = bool(event.get("thread_ts"))
+
+        # In channels: only respond to @mentions or thread replies, skip top-level messages
+        if reply_to_mentions_only and event_type == "message" and not is_dm and not is_thread:
+            return
+
         message_text = event.get("text", "")
         channel_id = event.get("channel", "")
         user = event.get("user", "")
@@ -197,7 +205,20 @@ def attach_routes(
         files, images = _download_event_files(slack_tools, event)
 
         try:
-            log_error(f"stream debug: thread_ts={ts!r} channel={channel_id!r} team_id={team_id!r} bot_user_id={bot_user_id!r}")
+            # Show thinking status with rotating loading messages
+            await async_client.assistant_threads_setStatus(
+                channel_id=channel_id,
+                thread_ts=ts,
+                status="Thinking...",
+                loading_messages=[
+                    "Teaching the hamsters to type faster...",
+                    "Untangling the internet cables...",
+                    "Consulting the office goldfish...",
+                    "Polishing up the response just for you...",
+                    "Convincing the AI to stop overthinking...",
+                ],
+            )
+
             # Use the SDK's ChatStream helper — it handles
             # start/append/stop, buffering, and ordering internally.
             streamer = await async_client.chat_stream(
@@ -207,19 +228,42 @@ def attach_routes(
                 recipient_user_id=bot_user_id,
             )
 
-            async for chunk in agent.arun(  # type: ignore[union-attr, misc]
+            status_cleared = False
+
+            # Pick the right entity to run
+            entity = agent or team or workflow
+            response_stream = entity.arun(  # type: ignore[union-attr, misc]
                 message_text,
                 stream=True,
                 user_id=user,
                 session_id=session_id,
                 files=files if files else None,
                 images=images if images else None,
-            ):
-                if chunk.event == RunEvent.run_content:
+            )
+
+            async for chunk in response_stream:
+                if chunk.event == RunEvent.run_content and chunk.content:
+                    if not status_cleared:
+                        await async_client.assistant_threads_setStatus(
+                            channel_id=channel_id,
+                            thread_ts=ts,
+                            status="",
+                        )
+                        status_cleared = True
                     await streamer.append(markdown_text=str(chunk.content))
+
             await streamer.stop()
         except Exception as e:
             log_error(f"Error streaming slack response: {e}")
+            # Clear status on error
+            try:
+                await async_client.assistant_threads_setStatus(
+                    channel_id=channel_id,
+                    thread_ts=ts,
+                    status="",
+                )
+            except Exception:
+                pass
             _send_slack_message(
                 slack_tools,
                 channel=channel_id,
