@@ -69,7 +69,7 @@ def attach_routes(
 
         if "event" in data:
             event = data["event"]
-            if event.get("bot_id"):
+            if event.get("bot_id") or (event.get("message") or {}).get("bot_id") or event.get("subtype"):
                 pass
             elif streaming and agent:
                 background_tasks.add_task(_stream_slack_response, data)
@@ -197,6 +197,7 @@ def attach_routes(
         files, images = _download_event_files(slack_tools, event)
 
         try:
+            log_error(f"stream debug: thread_ts={ts!r} channel={channel_id!r} team_id={team_id!r} bot_user_id={bot_user_id!r}")
             # Use the SDK's ChatStream helper — it handles
             # start/append/stop, buffering, and ordering internally.
             streamer = await async_client.chat_stream(
