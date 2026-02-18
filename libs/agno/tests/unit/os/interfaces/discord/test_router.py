@@ -170,6 +170,35 @@ class TestAllowlists:
         assert resp.status_code == 200
         assert resp.json()["type"] == 5
 
+    def test_disallowed_channel_returns_ephemeral(self, mock_agent):
+        app = _make_app(mock_agent, allowed_channel_ids=["allowed_ch"])
+        client = TestClient(app)
+
+        payload = {
+            "type": 2,
+            "id": "1234",
+            "application_id": "app123",
+            "token": "tok",
+            "guild_id": "guild1",
+            "channel_id": "wrong_ch",
+            "member": {"user": {"id": "user1"}},
+            "data": {"name": "ask", "options": []},
+        }
+
+        resp = _post_interaction(client, payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["type"] == 4
+        assert data["data"]["flags"] == 64
+
+    def test_no_allowlists_allows_all(self, mock_agent):
+        app = _make_app(mock_agent)
+        client = TestClient(app)
+
+        resp = _post_interaction(client, _slash_command_payload())
+        assert resp.status_code == 200
+        assert resp.json()["type"] == 5
+
 
 # Session ID construction via _build_session_id: DM, guild channel, thread
 class TestSessionId:
@@ -407,6 +436,61 @@ class TestBackgroundDelegation:
         post_url = mock_session.post.call_args[0][0]
         assert "/webhooks/" in post_url
 
+    def test_audio_attachment_routed_correctly(self, mock_agent):
+        mock_agent.arun = AsyncMock(return_value=_make_agent_response())
+        mock_session = _make_mock_aiohttp_session()
+
+        payload = _slash_command_payload()
+        payload["data"]["options"].append({"name": "file", "value": "att123", "type": 11})
+        payload["data"]["resolved"] = {
+            "attachments": {
+                "att123": {
+                    "url": "https://cdn.discordapp.com/test.mp3",
+                    "content_type": "audio/mpeg",
+                    "filename": "test.mp3",
+                    "size": 2048,
+                }
+            }
+        }
+
+        with patch("agno.os.interfaces.discord.router.aiohttp") as mock_aiohttp:
+            mock_aiohttp.ClientSession.return_value = mock_session
+            mock_aiohttp.ClientTimeout = MagicMock()
+            mock_aiohttp.FormData = MagicMock()
+
+            app = _make_app(mock_agent)
+            client = TestClient(app, raise_server_exceptions=False)
+            _post_interaction(client, payload)
+
+        mock_agent.arun.assert_called_once()
+        call_kwargs = mock_agent.arun.call_args
+        assert call_kwargs.kwargs.get("audio") is not None
+        assert len(call_kwargs.kwargs["audio"]) == 1
+
+    def test_multiple_media_types_uploaded(self, mock_agent):
+        mock_image = MagicMock()
+        mock_image.get_content_bytes.return_value = b"img"
+        mock_image.filename = "photo.png"
+
+        mock_file = MagicMock()
+        mock_file.get_content_bytes.return_value = b"doc"
+        mock_file.filename = "report.pdf"
+
+        response = _make_agent_response(images=[mock_image], files=[mock_file])
+        mock_agent.arun = AsyncMock(return_value=response)
+        mock_session = _make_mock_aiohttp_session()
+
+        with patch("agno.os.interfaces.discord.router.aiohttp") as mock_aiohttp:
+            mock_aiohttp.ClientSession.return_value = mock_session
+            mock_aiohttp.ClientTimeout = MagicMock()
+            mock_aiohttp.FormData = MagicMock()
+
+            app = _make_app(mock_agent)
+            client = TestClient(app, raise_server_exceptions=False)
+            _post_interaction(client, _slash_command_payload())
+
+        assert mock_session.post.call_count >= 2
+
     def test_error_sends_error_message(self, mock_agent):
         mock_agent.arun = AsyncMock(side_effect=Exception("Agent crashed"))
         mock_session = _make_mock_aiohttp_session()
@@ -475,6 +559,27 @@ class TestProtocolHandling:
         session_id = call_kwargs.kwargs.get("session_id", "")
         assert session_id.startswith("dc:channel:")
 
+    def test_missing_message_option_sends_error(self, mock_agent):
+        mock_session = _make_mock_aiohttp_session()
+
+        with patch("agno.os.interfaces.discord.router.aiohttp") as mock_aiohttp:
+            mock_aiohttp.ClientSession.return_value = mock_session
+            mock_aiohttp.ClientTimeout = MagicMock()
+            mock_aiohttp.FormData = MagicMock()
+
+            payload = _slash_command_payload()
+            payload["data"]["options"] = []
+
+            app = _make_app(mock_agent)
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = _post_interaction(client, payload)
+
+        assert resp.status_code == 200
+        mock_agent.arun.assert_not_called()
+        mock_session.patch.assert_called_once()
+        patch_url = mock_session.patch.call_args[0][0]
+        assert "@original" in patch_url
+
 
 class TestAttachmentSafety:
     def test_oversized_content_length_skips_download(self, mock_agent):
@@ -489,6 +594,41 @@ class TestAttachmentSafety:
                     "url": "https://cdn.discordapp.com/file.bin",
                     "content_type": "image/png",
                     "filename": "large.png",
+                    "size": 1024,
+                }
+            }
+        }
+
+        with patch("agno.os.interfaces.discord.router.aiohttp") as mock_aiohttp:
+            mock_aiohttp.ClientSession.return_value = mock_session
+            mock_aiohttp.ClientTimeout = MagicMock()
+            mock_aiohttp.FormData = MagicMock()
+
+            app = _make_app(mock_agent)
+            client = TestClient(app, raise_server_exceptions=False)
+            _post_interaction(client, payload)
+
+        mock_agent.arun.assert_called_once()
+        call_kwargs = mock_agent.arun.call_args
+        assert call_kwargs.kwargs.get("images") is None
+
+    def test_download_failure_skips_attachment(self, mock_agent):
+        mock_agent.arun = AsyncMock(return_value=_make_agent_response())
+        mock_session = _make_mock_aiohttp_session()
+
+        mock_get_ctx = AsyncMock()
+        mock_get_ctx.__aenter__.side_effect = ConnectionError("CDN unavailable")
+        mock_get_ctx.__aexit__.return_value = False
+        mock_session.get.return_value = mock_get_ctx
+
+        payload = _slash_command_payload()
+        payload["data"]["options"].append({"name": "file", "value": "att123", "type": 11})
+        payload["data"]["resolved"] = {
+            "attachments": {
+                "att123": {
+                    "url": "https://cdn.discordapp.com/fail.png",
+                    "content_type": "image/png",
+                    "filename": "fail.png",
                     "size": 1024,
                 }
             }
