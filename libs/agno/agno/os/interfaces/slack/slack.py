@@ -24,6 +24,7 @@ class Slack(BaseInterface):
         reply_to_mentions_only: bool = True,
         token: Optional[str] = None,
         signing_secret: Optional[str] = None,
+        streaming: bool = False,
     ):
         self.agent = agent
         self.team = team
@@ -33,6 +34,7 @@ class Slack(BaseInterface):
         self.reply_to_mentions_only = reply_to_mentions_only
         self.token = token
         self.signing_secret = signing_secret
+        self.streaming = streaming
 
         if not (self.agent or self.team or self.workflow):
             raise ValueError("Slack requires an agent, team or workflow")
@@ -48,6 +50,7 @@ class Slack(BaseInterface):
             reply_to_mentions_only=self.reply_to_mentions_only,
             token=self.token,
             signing_secret=self.signing_secret,
+            streaming=self.streaming,
         )
 
         return self.router
