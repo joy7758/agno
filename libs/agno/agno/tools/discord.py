@@ -38,12 +38,8 @@ class DiscordTools(Toolkit):
             raise ValueError("Discord bot token is required")
 
         self.base_url = DISCORD_API_BASE
-        self.headers: Dict[str, str] = {
-            "Authorization": f"Bot {self.bot_token}",
-            "Content-Type": "application/json",
-        }
         self._session = requests.Session()
-        self._session.headers.update(self.headers)
+        self._session.headers["Authorization"] = f"Bot {self.bot_token}"
 
         tools: List[Any] = []
         if enable_send_message or all:
