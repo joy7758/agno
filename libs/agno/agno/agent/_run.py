@@ -94,6 +94,7 @@ from agno.utils.events import (
     handle_event,
 )
 from agno.utils.hooks import (
+    normalize_model_hooks,
     normalize_post_hooks,
     normalize_pre_hooks,
 )
@@ -339,7 +340,7 @@ def _run(
     15. Create session summary
     16. Cleanup and store the run response and session
     """
-    from agno.agent._hooks import execute_post_hooks, execute_pre_hooks
+    from agno.agent._hooks import execute_model_hooks, execute_post_hooks, execute_pre_hooks
     from agno.agent._init import disconnect_connectable_tools
     from agno.agent._messages import get_run_messages
     from agno.agent._response import (
@@ -485,6 +486,24 @@ def _run(
 
                 # Check for cancellation before model call
                 raise_if_cancelled(run_response.run_id)  # type: ignore
+
+                # 5.5. Execute model hooks (after context built, before model call)
+                if agent.model_hooks is not None:
+                    deque(
+                        execute_model_hooks(
+                            agent,
+                            hooks=agent.model_hooks,  # type: ignore
+                            run_messages=run_messages,
+                            tools=_tools,
+                            run_response=run_response,
+                            run_context=run_context,
+                            session=agent_session,
+                            user_id=user_id,
+                            debug_mode=debug_mode,
+                            stream_events=False,
+                        ),
+                        maxlen=0,
+                    )
 
                 # 6. Generate a response from the Model (includes running function calls)
                 agent.model = cast(Model, agent.model)
@@ -708,7 +727,7 @@ def _run_stream(
     12. Create session summary
     13. Cleanup and store the run response and session
     """
-    from agno.agent._hooks import execute_post_hooks, execute_pre_hooks
+    from agno.agent._hooks import execute_model_hooks, execute_post_hooks, execute_pre_hooks
     from agno.agent._init import disconnect_connectable_tools
     from agno.agent._messages import get_run_messages
     from agno.agent._response import (
@@ -867,6 +886,21 @@ def _run_stream(
 
                 # Check for cancellation before model processing
                 raise_if_cancelled(run_response.run_id)  # type: ignore
+
+                # 5.5. Execute model hooks
+                if agent.model_hooks is not None:
+                    yield from execute_model_hooks(
+                        agent,
+                        hooks=agent.model_hooks,  # type: ignore
+                        run_messages=run_messages,
+                        tools=_tools,
+                        run_response=run_response,
+                        run_context=run_context,
+                        session=agent_session,
+                        user_id=user_id,
+                        debug_mode=debug_mode,
+                        stream_events=stream_events,
+                    )
 
                 # 6. Process model response
                 if agent.output_model is None:
@@ -1215,6 +1249,8 @@ def run_dispatch(
     if not agent._hooks_normalised:
         if agent.pre_hooks:
             agent.pre_hooks = normalize_pre_hooks(agent.pre_hooks)  # type: ignore
+        if agent.model_hooks:
+            agent.model_hooks = normalize_model_hooks(agent.model_hooks)  # type: ignore
         if agent.post_hooks:
             agent.post_hooks = normalize_post_hooks(agent.post_hooks)  # type: ignore
         agent._hooks_normalised = True
@@ -1376,7 +1412,7 @@ async def _arun(
     15. Create session summary
     16. Cleanup and store (scrub, stop timer, save to file, add to session, calculate metrics, save session)
     """
-    from agno.agent._hooks import aexecute_post_hooks, aexecute_pre_hooks
+    from agno.agent._hooks import aexecute_model_hooks, aexecute_post_hooks, aexecute_pre_hooks
     from agno.agent._init import disconnect_connectable_tools, disconnect_mcp_tools
     from agno.agent._messages import aget_run_messages
     from agno.agent._response import (
@@ -1531,6 +1567,22 @@ async def _arun(
 
                 # Check for cancellation before model call
                 await araise_if_cancelled(run_response.run_id)  # type: ignore
+
+                # 8.5. Execute model hooks (after context built, before model call)
+                if agent.model_hooks is not None:
+                    async for _ in aexecute_model_hooks(
+                        agent,
+                        hooks=agent.model_hooks,  # type: ignore
+                        run_messages=run_messages,
+                        tools=_tools,
+                        run_response=run_response,
+                        run_context=run_context,
+                        session=agent_session,
+                        user_id=user_id,
+                        debug_mode=debug_mode,
+                        stream_events=False,
+                    ):
+                        pass
 
                 # 9. Generate a response from the Model (includes running function calls)
                 model_response: ModelResponse = await agent.model.aresponse(
@@ -1857,7 +1909,7 @@ async def _arun_stream(
     12. Create session summary
     13. Cleanup and store (scrub, stop timer, save to file, add to session, calculate metrics, save session)
     """
-    from agno.agent._hooks import aexecute_post_hooks, aexecute_pre_hooks
+    from agno.agent._hooks import aexecute_model_hooks, aexecute_post_hooks, aexecute_pre_hooks
     from agno.agent._init import disconnect_connectable_tools, disconnect_mcp_tools
     from agno.agent._messages import aget_run_messages
     from agno.agent._response import (
@@ -2021,6 +2073,22 @@ async def _arun_stream(
                     yield item
 
                 await araise_if_cancelled(run_response.run_id)  # type: ignore
+
+                # 8.5. Execute model hooks
+                if agent.model_hooks is not None:
+                    async for event in aexecute_model_hooks(
+                        agent,
+                        hooks=agent.model_hooks,  # type: ignore
+                        run_messages=run_messages,
+                        tools=_tools,
+                        run_response=run_response,
+                        run_context=run_context,
+                        session=agent_session,
+                        user_id=user_id,
+                        debug_mode=debug_mode,
+                        stream_events=stream_events,
+                    ):
+                        yield event
 
                 # 9. Generate a response from the Model
                 if agent.output_model is None:
@@ -2405,6 +2473,8 @@ def arun_dispatch(  # type: ignore
     if not agent._hooks_normalised:
         if agent.pre_hooks:
             agent.pre_hooks = normalize_pre_hooks(agent.pre_hooks, async_mode=True)  # type: ignore
+        if agent.model_hooks:
+            agent.model_hooks = normalize_model_hooks(agent.model_hooks, async_mode=True)  # type: ignore
         if agent.post_hooks:
             agent.post_hooks = normalize_post_hooks(agent.post_hooks, async_mode=True)  # type: ignore
         agent._hooks_normalised = True
