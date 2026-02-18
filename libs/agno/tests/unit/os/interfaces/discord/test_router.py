@@ -78,7 +78,7 @@ class TestPingPong:
 
 # Ed25519 signature validation: missing headers, bad signature
 class TestSignatureValidation:
-    def test_missing_headers_returns_401(self, mock_agent):
+    def test_missing_headers_returns_400(self, mock_agent):
         app = _make_app(mock_agent)
         client = TestClient(app)
         resp = client.post(
@@ -86,9 +86,9 @@ class TestSignatureValidation:
             content=b'{"type": 1}',
             headers={"Content-Type": "application/json"},
         )
-        assert resp.status_code == 401
+        assert resp.status_code == 400
 
-    def test_invalid_signature_returns_401(self, mock_agent):
+    def test_invalid_signature_returns_403(self, mock_agent):
         app = _make_app(mock_agent)
         client = TestClient(app)
         resp = client.post(
@@ -100,7 +100,7 @@ class TestSignatureValidation:
                 "X-Signature-Timestamp": str(int(time.time())),
             },
         )
-        assert resp.status_code == 401
+        assert resp.status_code == 403
 
 
 # Slash command returns deferred ACK (type 5)
@@ -319,7 +319,6 @@ def _slash_command_payload(**overrides):
 
 
 class TestBackgroundDelegation:
-
     def test_command_edits_original_with_response(self, mock_agent):
         mock_agent.arun = AsyncMock(return_value=_make_agent_response())
         mock_session = _make_mock_aiohttp_session()
@@ -448,7 +447,6 @@ class TestBackgroundDelegation:
 
 
 class TestProtocolHandling:
-
     def test_unknown_interaction_type_returns_400(self, mock_agent):
         app = _make_app(mock_agent)
         client = TestClient(app)
@@ -479,7 +477,6 @@ class TestProtocolHandling:
 
 
 class TestAttachmentSafety:
-
     def test_oversized_content_length_skips_download(self, mock_agent):
         mock_agent.arun = AsyncMock(return_value=_make_agent_response())
         mock_session = _make_mock_aiohttp_session(content_length=30 * 1024 * 1024)
@@ -509,3 +506,45 @@ class TestAttachmentSafety:
         mock_agent.arun.assert_called_once()
         call_kwargs = mock_agent.arun.call_args
         assert call_kwargs.kwargs.get("images") is None
+
+
+class TestEntityDelegation:
+    def test_team_entity_receives_command(self):
+        mock_team = MagicMock()
+        mock_team.arun = AsyncMock(return_value=_make_agent_response(content="Team response"))
+        mock_session = _make_mock_aiohttp_session()
+
+        with patch("agno.os.interfaces.discord.router.aiohttp") as mock_aiohttp:
+            mock_aiohttp.ClientSession.return_value = mock_session
+            mock_aiohttp.ClientTimeout = MagicMock()
+            mock_aiohttp.FormData = MagicMock()
+
+            discord = Discord(team=mock_team)
+            app = FastAPI()
+            app.include_router(discord.get_router())
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = _post_interaction(client, _slash_command_payload())
+
+        assert resp.status_code == 200
+        assert resp.json()["type"] == 5
+        mock_team.arun.assert_called_once()
+
+    def test_workflow_entity_receives_command(self):
+        mock_workflow = MagicMock()
+        mock_workflow.arun = AsyncMock(return_value=_make_agent_response(content="Workflow response"))
+        mock_session = _make_mock_aiohttp_session()
+
+        with patch("agno.os.interfaces.discord.router.aiohttp") as mock_aiohttp:
+            mock_aiohttp.ClientSession.return_value = mock_session
+            mock_aiohttp.ClientTimeout = MagicMock()
+            mock_aiohttp.FormData = MagicMock()
+
+            discord = Discord(workflow=mock_workflow)
+            app = FastAPI()
+            app.include_router(discord.get_router())
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = _post_interaction(client, _slash_command_payload())
+
+        assert resp.status_code == 200
+        assert resp.json()["type"] == 5
+        mock_workflow.arun.assert_called_once()

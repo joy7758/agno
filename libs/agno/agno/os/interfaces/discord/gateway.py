@@ -17,7 +17,6 @@ except ImportError:
 
 
 class GatewayReplier:
-
     def __init__(self, channel: Any):
         self._channel = channel
 
@@ -112,8 +111,13 @@ def create_gateway_client(
             session_id = f"dc:dm:{message.channel.id}"
         elif reply_in_thread and message.guild:
             thread_name = text[:100].strip() or "New conversation"
-            channel = await message.create_thread(name=thread_name)
-            session_id = f"dc:thread:{channel.id}"
+            try:
+                channel = await message.create_thread(name=thread_name)
+                session_id = f"dc:thread:{channel.id}"
+            except Exception as e:
+                log_warning(f"Failed to create thread (missing MANAGE_THREADS permission?): {e}")
+                channel = message.channel
+                session_id = f"dc:channel:{message.channel.id}:user:{user_id}"
         else:
             channel = message.channel
             session_id = f"dc:channel:{message.channel.id}:user:{user_id}"

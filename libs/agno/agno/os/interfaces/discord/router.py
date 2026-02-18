@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from agno.agent import Agent, RemoteAgent
 from agno.media import Audio, File, Image, Video
@@ -26,6 +27,17 @@ INTERACTION_APPLICATION_COMMAND = 2
 RESPONSE_PONG = 1
 RESPONSE_CHANNEL_MESSAGE_WITH_SOURCE = 4
 RESPONSE_DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE = 5
+
+
+class DiscordPongResponse(BaseModel):
+    type: int = Field(default=RESPONSE_PONG, description="Interaction response type (PONG)")
+
+
+class DiscordDeferredResponse(BaseModel):
+    type: int = Field(
+        default=RESPONSE_DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+        description="Interaction response type (deferred channel message)",
+    )
 
 
 # --- Session ID scheme ---
@@ -182,9 +194,12 @@ def attach_routes(
         operation_id=f"discord_interactions_{entity_type}",
         name="discord_interactions",
         description="Process incoming Discord interactions",
+        response_model=Union[DiscordPongResponse, DiscordDeferredResponse],
+        response_model_exclude_none=True,
         responses={
             200: {"description": "Interaction processed"},
-            401: {"description": "Invalid signature"},
+            400: {"description": "Missing signature headers"},
+            403: {"description": "Invalid signature"},
         },
     )
     async def discord_interactions(request: Request, background_tasks: BackgroundTasks):
@@ -193,10 +208,10 @@ def attach_routes(
         timestamp = request.headers.get("X-Signature-Timestamp", "")
 
         if not signature or not timestamp:
-            raise HTTPException(status_code=401, detail="Missing signature headers")
+            raise HTTPException(status_code=400, detail="Missing signature headers")
 
         if not verify_discord_signature(body, timestamp, signature):
-            raise HTTPException(status_code=401, detail="Invalid signature")
+            raise HTTPException(status_code=403, detail="Invalid signature")
 
         data = await request.json()
         interaction_type = data.get("type")
@@ -351,5 +366,13 @@ def attach_routes(
             audio_list.append(Audio(content=content_bytes))
         else:
             files.append(File(content=content_bytes, filename=filename))
+
+    async def _close_http_session() -> None:
+        nonlocal _http_session
+        if _http_session is not None and not _http_session.closed:
+            await _http_session.close()
+            _http_session = None
+
+    router._close_http_session = _close_http_session  # type: ignore[attr-defined]
 
     return router

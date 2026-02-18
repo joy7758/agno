@@ -107,29 +107,39 @@ class Discord(BaseInterface):
         return self.router
 
     def get_lifespan(self) -> Optional[Any]:
-        """Return a FastAPI lifespan that starts/stops the Discord Gateway WebSocket.
+        """Return a FastAPI lifespan that manages Discord resource lifecycle.
 
-        Returns ``None`` when gateway is disabled — the HTTP interactions endpoint
-        still works independently.
+        Handles cleanup of both the Gateway WebSocket connection (if enabled) and
+        the aiohttp session used by the HTTP webhook transport.
         """
-        if self._gateway_client is None:
+        has_gateway = self._gateway_client is not None
+        has_router = hasattr(self, "router")
+
+        if not has_gateway and not has_router:
             return None
 
         client = self._gateway_client
         token = self._gateway_token
+        discord_self = self
 
         @asynccontextmanager
-        async def gateway_lifespan(app: Any):  # noqa: ARG001
-            # Start the WebSocket client as a background task.  On shutdown, close the
-            # connection first (sends a clean disconnect), then cancel the task to avoid
-            # "task was destroyed but it is pending" warnings.
-            task = asyncio.create_task(client.start(token), name="discord-gateway")
+        async def discord_lifespan(app: Any):  # noqa: ARG001
+            task = None
+            if client is not None:
+                task = asyncio.create_task(client.start(token), name="discord-gateway")
             try:
                 yield
             finally:
-                await client.close()
-                task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await task
+                if client is not None and task is not None:
+                    await client.close()
+                    task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
+                # Close the aiohttp session used by the webhook transport
+                router = getattr(discord_self, "router", None)
+                if router is not None:
+                    close_fn = getattr(router, "_close_http_session", None)
+                    if close_fn is not None:
+                        await close_fn()
 
-        return gateway_lifespan
+        return discord_lifespan
