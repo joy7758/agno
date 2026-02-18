@@ -485,6 +485,8 @@ class Gemini(Model):
             if run_response and run_response.metrics:
                 run_response.metrics.set_time_to_first_token()
 
+            if assistant_message.metrics is None:
+                assistant_message.metrics = Metrics()
             assistant_message.metrics.start_timer()
             provider_response = self.get_client().models.generate_content(
                 model=self.id,
@@ -546,6 +548,8 @@ class Gemini(Model):
             if run_response and run_response.metrics:
                 run_response.metrics.set_time_to_first_token()
 
+            if assistant_message.metrics is None:
+                assistant_message.metrics = Metrics()
             assistant_message.metrics.start_timer()
             for response in self.get_client().models.generate_content_stream(
                 model=self.id,
@@ -604,6 +608,8 @@ class Gemini(Model):
             if run_response and run_response.metrics:
                 run_response.metrics.set_time_to_first_token()
 
+            if assistant_message.metrics is None:
+                assistant_message.metrics = Metrics()
             assistant_message.metrics.start_timer()
             provider_response = await self.get_client().aio.models.generate_content(
                 model=self.id,
@@ -666,6 +672,8 @@ class Gemini(Model):
             if run_response and run_response.metrics:
                 run_response.metrics.set_time_to_first_token()
 
+            if assistant_message.metrics is None:
+                assistant_message.metrics = Metrics()
             assistant_message.metrics.start_timer()
 
             async_stream = await self.get_client().aio.models.generate_content_stream(
@@ -1069,7 +1077,8 @@ class Gemini(Model):
                 )
                 if result.tool_name:
                     tool_names.append(result.tool_name)
-                message_metrics += result.metrics
+                if result.metrics is not None:
+                    message_metrics += result.metrics
 
         tool_name = ", ".join(tool_names) if tool_names else None
 

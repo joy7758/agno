@@ -6,13 +6,13 @@ from asyncio import CancelledError, Task, create_task
 from concurrent.futures import Future
 from typing import (
     TYPE_CHECKING,
-    Any,
     List,
     Optional,
 )
 
 if TYPE_CHECKING:
     from agno.agent.agent import Agent
+    from agno.run.agent import RunOutput
 
 from agno.db.base import UserMemory
 from agno.db.schemas.culture import CulturalKnowledge
@@ -30,7 +30,7 @@ def make_memories(
     agent: Agent,
     run_messages: RunMessages,
     user_id: Optional[str] = None,
-    run_response: Optional[Any] = None,
+    run_response: Optional["RunOutput"] = None,
 ):
     user_message_str = run_messages.user_message.get_content_string() if run_messages.user_message is not None else None
     if (
@@ -82,7 +82,7 @@ async def amake_memories(
     agent: Agent,
     run_messages: RunMessages,
     user_id: Optional[str] = None,
-    run_response: Optional[Any] = None,
+    run_response: Optional["RunOutput"] = None,
 ):
     user_message_str = run_messages.user_message.get_content_string() if run_messages.user_message is not None else None
     if (
@@ -135,7 +135,7 @@ async def astart_memory_task(
     run_messages: RunMessages,
     user_id: Optional[str],
     existing_task: Optional[Task[None]],
-    run_response: Optional[Any] = None,
+    run_response: Optional["RunOutput"] = None,
 ) -> Optional[Task[None]]:
     """Cancel any existing memory task and start a new one if conditions are met.
 
@@ -175,7 +175,7 @@ def start_memory_future(
     run_messages: RunMessages,
     user_id: Optional[str],
     existing_future: Optional[Future] = None,
-    run_response: Optional[Any] = None,
+    run_response: Optional["RunOutput"] = None,
 ) -> Optional[Future]:
     """Cancel any existing memory future and start a new one if conditions are met.
 
@@ -259,7 +259,7 @@ async def aget_user_memories(agent: Agent, user_id: Optional[str] = None) -> Opt
 def make_cultural_knowledge(
     agent: Agent,
     run_messages: RunMessages,
-    run_response: Optional[Any] = None,
+    run_response: Optional["RunOutput"] = None,
 ):
     if run_messages.user_message is not None and agent.culture_manager is not None and agent.update_cultural_knowledge:
         log_debug("Creating cultural knowledge.")
@@ -272,7 +272,7 @@ def make_cultural_knowledge(
 async def acreate_cultural_knowledge(
     agent: Agent,
     run_messages: RunMessages,
-    run_response: Optional[Any] = None,
+    run_response: Optional["RunOutput"] = None,
 ):
     if run_messages.user_message is not None and agent.culture_manager is not None and agent.update_cultural_knowledge:
         log_debug("Creating cultural knowledge.")
@@ -286,7 +286,7 @@ async def astart_cultural_knowledge_task(
     agent: Agent,
     run_messages: RunMessages,
     existing_task: Optional[Task[None]],
-    run_response: Optional[Any] = None,
+    run_response: Optional["RunOutput"] = None,
 ) -> Optional[Task[None]]:
     """Cancel any existing cultural knowledge task and start a new one if conditions are met.
 
@@ -319,7 +319,7 @@ def start_cultural_knowledge_future(
     agent: Agent,
     run_messages: RunMessages,
     existing_future: Optional[Future] = None,
-    run_response: Optional[Any] = None,
+    run_response: Optional["RunOutput"] = None,
 ) -> Optional[Future]:
     """Cancel any existing cultural knowledge future and start a new one if conditions are met.
 
@@ -387,7 +387,7 @@ def process_learnings(
     run_messages: RunMessages,
     session: AgentSession,
     user_id: Optional[str],
-    run_response: Optional[Any] = None,
+    run_response: Optional["RunOutput"] = None,
 ) -> None:
     """Process learnings from conversation (runs in background thread)."""
     if agent._learning is None:
@@ -415,7 +415,7 @@ async def aprocess_learnings(
     run_messages: RunMessages,
     session: AgentSession,
     user_id: Optional[str],
-    run_response: Optional[Any] = None,
+    run_response: Optional["RunOutput"] = None,
 ) -> None:
     """Async process learnings from conversation."""
     if agent._learning is None:
@@ -442,7 +442,7 @@ async def astart_learning_task(
     session: AgentSession,
     user_id: Optional[str],
     existing_task: Optional[Task] = None,
-    run_response: Optional[Any] = None,
+    run_response: Optional["RunOutput"] = None,
 ) -> Optional[Task]:
     """Start learning extraction as async task.
 
@@ -487,7 +487,7 @@ def start_learning_future(
     session: AgentSession,
     user_id: Optional[str],
     existing_future: Optional[Future] = None,
-    run_response: Optional[Any] = None,
+    run_response: Optional["RunOutput"] = None,
 ) -> Optional[Future]:
     """Start learning extraction in background thread.
 

@@ -5,24 +5,20 @@ All metric classes now live in agno.metrics.  This shim keeps
 """
 
 from agno.metrics import (  # noqa: F401
-    MessageMetrics,
     Metrics,
     ModelMetrics,
-    RunMetrics,
     SessionMetrics,
-    SessionModelMetrics,
     ToolCallMetrics,
+    accumulate_eval_metrics,
     accumulate_model_metrics,
 )
 
 # Explicit re-export for type checkers
 __all__ = [
     "Metrics",
-    "RunMetrics",
-    "MessageMetrics",
     "ModelMetrics",
     "SessionMetrics",
-    "SessionModelMetrics",
     "ToolCallMetrics",
+    "accumulate_eval_metrics",
     "accumulate_model_metrics",
 ]

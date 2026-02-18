@@ -1261,7 +1261,7 @@ class Model(ABC):
         # Add usage metrics if provided
         if provider_response.response_usage is not None:
             if assistant_message.metrics is None:
-                # Initialize if not already initialized
+                assistant_message.metrics = Metrics()
                 assistant_message.metrics.start_timer()
             # Update Metrics with usage data from response
             usage = provider_response.response_usage
@@ -1426,6 +1426,7 @@ class Model(ABC):
                             cache_write_tokens=assistant_message.metrics.cache_write_tokens,
                             reasoning_tokens=assistant_message.metrics.reasoning_tokens,
                             time_to_first_token=assistant_message.metrics.time_to_first_token,
+                            cost=assistant_message.metrics.cost,
                             provider_metrics=assistant_message.metrics.provider_metrics,
                         )
                         accumulate_model_metrics(_stream_model_response, self, model_type, run_response)
@@ -1553,7 +1554,6 @@ class Model(ABC):
 
                 # No tool calls or finished processing them
                 break
-
 
             log_debug(f"{self.get_provider()} Response Stream End", center=True, symbol="-")
 
@@ -1724,6 +1724,7 @@ class Model(ABC):
                             cache_write_tokens=assistant_message.metrics.cache_write_tokens,
                             reasoning_tokens=assistant_message.metrics.reasoning_tokens,
                             time_to_first_token=assistant_message.metrics.time_to_first_token,
+                            cost=assistant_message.metrics.cost,
                             provider_metrics=assistant_message.metrics.provider_metrics,
                         )
                         accumulate_model_metrics(_stream_model_response, self, model_type, run_response)
@@ -1851,7 +1852,6 @@ class Model(ABC):
 
                 # No tool calls or finished processing them
                 break
-
 
             log_debug(f"{self.get_provider()} Async Response Stream End", center=True, symbol="-")
 

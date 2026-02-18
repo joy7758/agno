@@ -599,6 +599,8 @@ class Claude(Model):
             chat_messages, system_message = format_messages(messages, compress_tool_results=compress_tool_results)
             request_kwargs = self._prepare_request_kwargs(system_message, tools=tools, response_format=response_format)
 
+            if assistant_message.metrics is None:
+                assistant_message.metrics = Metrics()
             if self._has_beta_features(response_format=response_format, tools=tools):
                 assistant_message.metrics.start_timer()
                 provider_response = self.get_client().beta.messages.create(
@@ -667,6 +669,8 @@ class Claude(Model):
             if run_response and run_response.metrics:
                 run_response.metrics.set_time_to_first_token()
 
+            if assistant_message.metrics is None:
+                assistant_message.metrics = Metrics()
             # Beta features
             if self._has_beta_features(response_format=response_format, tools=tools):
                 assistant_message.metrics.start_timer()
@@ -724,6 +728,8 @@ class Claude(Model):
             chat_messages, system_message = format_messages(messages, compress_tool_results=compress_tool_results)
             request_kwargs = self._prepare_request_kwargs(system_message, tools=tools, response_format=response_format)
 
+            if assistant_message.metrics is None:
+                assistant_message.metrics = Metrics()
             # Beta features
             if self._has_beta_features(response_format=response_format, tools=tools):
                 assistant_message.metrics.start_timer()
@@ -790,6 +796,8 @@ class Claude(Model):
             chat_messages, system_message = format_messages(messages, compress_tool_results=compress_tool_results)
             request_kwargs = self._prepare_request_kwargs(system_message, tools=tools, response_format=response_format)
 
+            if assistant_message.metrics is None:
+                assistant_message.metrics = Metrics()
             if self._has_beta_features(response_format=response_format, tools=tools):
                 assistant_message.metrics.start_timer()
                 async with self.get_async_client().beta.messages.stream(

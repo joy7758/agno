@@ -241,6 +241,8 @@ class LiteLLM(Model):
         if run_response and run_response.metrics:
             run_response.metrics.set_time_to_first_token()
 
+        if assistant_message.metrics is None:
+            assistant_message.metrics = Metrics()
         assistant_message.metrics.start_timer()
 
         provider_response = self.get_client().completion(**completion_kwargs)
@@ -269,6 +271,8 @@ class LiteLLM(Model):
         if run_response and run_response.metrics:
             run_response.metrics.set_time_to_first_token()
 
+        if assistant_message.metrics is None:
+            assistant_message.metrics = Metrics()
         assistant_message.metrics.start_timer()
 
         for chunk in self.get_client().completion(**completion_kwargs):
@@ -293,6 +297,8 @@ class LiteLLM(Model):
         if run_response and run_response.metrics:
             run_response.metrics.set_time_to_first_token()
 
+        if assistant_message.metrics is None:
+            assistant_message.metrics = Metrics()
         assistant_message.metrics.start_timer()
 
         provider_response = await self.get_client().acompletion(**completion_kwargs)
@@ -321,6 +327,8 @@ class LiteLLM(Model):
         if run_response and run_response.metrics:
             run_response.metrics.set_time_to_first_token()
 
+        if assistant_message.metrics is None:
+            assistant_message.metrics = Metrics()
         assistant_message.metrics.start_timer()
 
         try:
@@ -515,19 +523,23 @@ class LiteLLM(Model):
         if isinstance(response_usage, dict):
             metrics.input_tokens = response_usage.get("prompt_tokens") or 0
             metrics.output_tokens = response_usage.get("completion_tokens") or 0
-            prompt_details = response_usage.get("prompt_tokens_details")
-            completion_details = response_usage.get("completion_tokens_details")
-            if prompt_details and isinstance(prompt_details, dict):
+            if (prompt_details := response_usage.get("prompt_tokens_details")) and isinstance(prompt_details, dict):
                 metrics.cache_read_tokens = prompt_details.get("cached_tokens", 0) or 0
-            if completion_details and isinstance(completion_details, dict):
+                metrics.audio_input_tokens = prompt_details.get("audio_tokens", 0) or 0
+            if (completion_details := response_usage.get("completion_tokens_details")) and isinstance(
+                completion_details, dict
+            ):
                 metrics.reasoning_tokens = completion_details.get("reasoning_tokens", 0) or 0
+                metrics.audio_output_tokens = completion_details.get("audio_tokens", 0) or 0
         else:
             metrics.input_tokens = response_usage.prompt_tokens or 0
             metrics.output_tokens = response_usage.completion_tokens or 0
-            if hasattr(response_usage, "prompt_tokens_details") and response_usage.prompt_tokens_details:
-                metrics.cache_read_tokens = getattr(response_usage.prompt_tokens_details, "cached_tokens", 0) or 0
-            if hasattr(response_usage, "completion_tokens_details") and response_usage.completion_tokens_details:
-                metrics.reasoning_tokens = getattr(response_usage.completion_tokens_details, "reasoning_tokens", 0) or 0
+            if prompt_details := getattr(response_usage, "prompt_tokens_details", None):
+                metrics.cache_read_tokens = getattr(prompt_details, "cached_tokens", 0) or 0
+                metrics.audio_input_tokens = getattr(prompt_details, "audio_tokens", 0) or 0
+            if completion_details := getattr(response_usage, "completion_tokens_details", None):
+                metrics.reasoning_tokens = getattr(completion_details, "reasoning_tokens", 0) or 0
+                metrics.audio_output_tokens = getattr(completion_details, "audio_tokens", 0) or 0
 
         metrics.total_tokens = metrics.input_tokens + metrics.output_tokens
 

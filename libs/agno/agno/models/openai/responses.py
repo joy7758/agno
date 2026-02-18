@@ -592,6 +592,8 @@ class OpenAIResponses(Model):
             if run_response and run_response.metrics:
                 run_response.metrics.set_time_to_first_token()
 
+            if assistant_message.metrics is None:
+                assistant_message.metrics = Metrics()
             assistant_message.metrics.start_timer()
 
             provider_response = self.get_client().responses.create(
@@ -665,6 +667,8 @@ class OpenAIResponses(Model):
             if run_response and run_response.metrics:
                 run_response.metrics.set_time_to_first_token()
 
+            if assistant_message.metrics is None:
+                assistant_message.metrics = Metrics()
             assistant_message.metrics.start_timer()
 
             provider_response = await self.get_async_client().responses.create(
@@ -739,6 +743,8 @@ class OpenAIResponses(Model):
             if run_response and run_response.metrics:
                 run_response.metrics.set_time_to_first_token()
 
+            if assistant_message.metrics is None:
+                assistant_message.metrics = Metrics()
             assistant_message.metrics.start_timer()
 
             for chunk in self.get_client().responses.create(
@@ -816,6 +822,8 @@ class OpenAIResponses(Model):
             if run_response and run_response.metrics:
                 run_response.metrics.set_time_to_first_token()
 
+            if assistant_message.metrics is None:
+                assistant_message.metrics = Metrics()
             assistant_message.metrics.start_timer()
 
             async_stream = await self.get_async_client().responses.create(
@@ -1005,7 +1013,7 @@ class OpenAIResponses(Model):
                 if model_response.provider_data is None:
                     model_response.provider_data = {}
                 model_response.provider_data["response_id"] = stream_event.response.id
-            if not assistant_message.metrics.time_to_first_token:
+            if assistant_message.metrics is not None and not assistant_message.metrics.time_to_first_token:
                 assistant_message.metrics.set_time_to_first_token()
 
         # 2. Add citations
@@ -1124,7 +1132,5 @@ class OpenAIResponses(Model):
 
         if output_tokens_details := response_usage.output_tokens_details:
             metrics.reasoning_tokens = output_tokens_details.reasoning_tokens
-
-        metrics.cost = getattr(response_usage, "cost", None)
 
         return metrics

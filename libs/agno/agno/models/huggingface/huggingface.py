@@ -252,6 +252,8 @@ class HuggingFace(Model):
             if run_response and run_response.metrics:
                 run_response.metrics.set_time_to_first_token()
 
+            if assistant_message.metrics is None:
+                assistant_message.metrics = Metrics()
             assistant_message.metrics.start_timer()
             provider_response = self.get_client().chat.completions.create(
                 model=self.id,
@@ -286,6 +288,8 @@ class HuggingFace(Model):
             if run_response and run_response.metrics:
                 run_response.metrics.set_time_to_first_token()
 
+            if assistant_message.metrics is None:
+                assistant_message.metrics = Metrics()
             assistant_message.metrics.start_timer()
             provider_response = await self.get_async_client().chat.completions.create(
                 model=self.id,
@@ -320,6 +324,8 @@ class HuggingFace(Model):
             if run_response and run_response.metrics:
                 run_response.metrics.set_time_to_first_token()
 
+            if assistant_message.metrics is None:
+                assistant_message.metrics = Metrics()
             assistant_message.metrics.start_timer()
 
             stream = self.get_client().chat.completions.create(
@@ -359,6 +365,8 @@ class HuggingFace(Model):
             if run_response and run_response.metrics:
                 run_response.metrics.set_time_to_first_token()
 
+            if assistant_message.metrics is None:
+                assistant_message.metrics = Metrics()
             assistant_message.metrics.start_timer()
             provider_response = await self.get_async_client().chat.completions.create(
                 model=self.id,

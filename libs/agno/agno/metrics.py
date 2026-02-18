@@ -598,10 +598,21 @@ def accumulate_model_metrics(
         provider_metrics=usage.provider_metrics,
     )
 
-    # Add to details dict (create list if needed)
+    # Add to details dict, merging if same provider+id already exists
     if model_type not in run_response.metrics.details:
         run_response.metrics.details[model_type] = []
-    run_response.metrics.details[model_type].append(model_metrics)
+
+    # Look for an existing entry with the same provider and id to merge into
+    existing_entry = None
+    for entry in run_response.metrics.details[model_type]:
+        if entry.id == model_id and entry.provider == model_provider:
+            existing_entry = entry
+            break
+
+    if existing_entry is not None:
+        existing_entry.accumulate(model_metrics)
+    else:
+        run_response.metrics.details[model_type].append(model_metrics)
 
     # Accumulate token counts to top-level metrics
     run_response.metrics.input_tokens += usage.input_tokens or 0
@@ -688,9 +699,3 @@ def accumulate_eval_metrics(
             run_response.metrics.additional_metrics = {}
         existing = run_response.metrics.additional_metrics.get("eval_duration", 0)
         run_response.metrics.additional_metrics["eval_duration"] = existing + eval_metrics.duration
-
-
-# Backward compatibility aliases
-RunMetrics = Metrics
-MessageMetrics = Metrics
-SessionModelMetrics = ModelMetrics
