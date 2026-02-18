@@ -22,6 +22,8 @@ class Slack(BaseInterface):
         prefix: str = "/slack",
         tags: Optional[List[str]] = None,
         reply_to_mentions_only: bool = True,
+        token: Optional[str] = None,
+        signing_secret: Optional[str] = None,
     ):
         self.agent = agent
         self.team = team
@@ -29,6 +31,8 @@ class Slack(BaseInterface):
         self.prefix = prefix
         self.tags = tags or ["Slack"]
         self.reply_to_mentions_only = reply_to_mentions_only
+        self.token = token
+        self.signing_secret = signing_secret
 
         if not (self.agent or self.team or self.workflow):
             raise ValueError("Slack requires an agent, team or workflow")
@@ -42,6 +46,8 @@ class Slack(BaseInterface):
             team=self.team,
             workflow=self.workflow,
             reply_to_mentions_only=self.reply_to_mentions_only,
+            token=self.token,
+            signing_secret=self.signing_secret,
         )
 
         return self.router

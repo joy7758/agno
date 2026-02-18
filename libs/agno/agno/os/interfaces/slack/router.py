@@ -30,13 +30,20 @@ def attach_routes(
     team: Optional[Union[Team, RemoteTeam]] = None,
     workflow: Optional[Union[Workflow, RemoteWorkflow]] = None,
     reply_to_mentions_only: bool = True,
+    token: Optional[str] = None,
+    signing_secret: Optional[str] = None,
 ) -> APIRouter:
+    entity = agent or team or workflow
     entity_type = "agent" if agent else "team" if team else "workflow" if workflow else "unknown"
-    slack_tools = SlackTools()
+    raw_name = getattr(entity, "name", None)
+    entity_name = raw_name if isinstance(raw_name, str) else entity_type
+    # Slugify the entity name for use as a unique operation_id suffix
+    op_suffix = entity_name.lower().replace(" ", "_")
+    slack_tools = SlackTools(token=token)
 
     @router.post(
         "/events",
-        operation_id=f"slack_events_{entity_type}",
+        operation_id=f"slack_events_{op_suffix}",
         name="slack_events",
         description="Process incoming Slack events",
         response_model=Union[SlackChallengeResponse, SlackEventResponse],
@@ -55,7 +62,7 @@ def attach_routes(
         if not timestamp or not slack_signature:
             raise HTTPException(status_code=400, detail="Missing Slack headers")
 
-        if not verify_slack_signature(body, timestamp, slack_signature):
+        if not verify_slack_signature(body, timestamp, slack_signature, signing_secret=signing_secret):
             raise HTTPException(status_code=403, detail="Invalid signature")
 
         data = await request.json()
