@@ -6,10 +6,18 @@ from pydantic import BaseModel, Field
 from agno.agent import Agent, RemoteAgent, RunEvent
 from agno.media import File, Image
 from agno.os.interfaces.slack.security import verify_slack_signature
+from agno.run.team import TeamRunEvent
+from agno.run.workflow import WorkflowRunEvent
 from agno.team import RemoteTeam, Team
 from agno.tools.slack import SlackTools
 from agno.utils.log import log_error
 from agno.workflow import RemoteWorkflow, Workflow
+
+_BOT_SUBTYPES = frozenset({"bot_message", "bot_add", "bot_remove", "bot_enable", "bot_disable"})
+_TOOL_STARTED = {RunEvent.tool_call_started.value, TeamRunEvent.tool_call_started.value}
+_TOOL_COMPLETED = {RunEvent.tool_call_completed.value, TeamRunEvent.tool_call_completed.value}
+_CONTENT_EVENTS = {RunEvent.run_content.value, TeamRunEvent.run_content.value}
+_STEP_OUTPUT = {WorkflowRunEvent.step_output.value}
 
 
 class SlackEventResponse(BaseModel):
@@ -66,6 +74,9 @@ def attach_routes(
         if not verify_slack_signature(body, timestamp, slack_signature, signing_secret=signing_secret):
             raise HTTPException(status_code=403, detail="Invalid signature")
 
+        if request.headers.get("X-Slack-Retry-Num"):
+            return SlackEventResponse(status="ok")
+
         data = await request.json()
 
         if data.get("type") == "url_verification":
@@ -73,7 +84,15 @@ def attach_routes(
 
         if "event" in data:
             event = data["event"]
-            if event.get("bot_id") or (event.get("message") or {}).get("bot_id") or event.get("subtype"):
+            event_type = event.get("type")
+
+            if event_type == "assistant_thread_started" and streaming:
+                background_tasks.add_task(_handle_thread_started, event, slack_tools.token or "")
+            elif (
+                event.get("bot_id")
+                or (event.get("message") or {}).get("bot_id")
+                or event.get("subtype") in _BOT_SUBTYPES
+            ):
                 pass
             elif streaming:
                 background_tasks.add_task(_stream_slack_response, data)
@@ -89,9 +108,8 @@ def attach_routes(
 
         channel_type = event.get("channel_type", "")
         is_dm = channel_type == "im"
-        is_thread = bool(event.get("thread_ts"))
 
-        if reply_to_mentions_only and event_type == "message" and not is_dm and not is_thread:
+        if reply_to_mentions_only and event_type == "message" and not is_dm:
             return False
         return True
 
@@ -186,30 +204,39 @@ def attach_routes(
         event = _fetch_mention_files(event, ctx["channel_id"], ctx["ts"])
         files, images = _download_event_files(slack_tools, event)
 
-        team_id = data.get("team_id") or event.get("team", "")
+        team_id = data.get("team_id") or event.get("team") or None
         authorizations = data.get("authorizations", [])
-        bot_user_id = authorizations[0]["user_id"] if authorizations else ""
+        bot_user_id = authorizations[0]["user_id"] if authorizations else None
 
         async_client = AsyncWebClient(token=slack_tools.token)
+        stream_ts: Optional[str] = None
         try:
-            await async_client.assistant_threads_setStatus(
-                channel_id=ctx["channel_id"],
-                thread_ts=ctx["ts"],
-                status="Thinking...",
-            )
+            try:
+                await async_client.assistant_threads_setStatus(
+                    channel_id=ctx["channel_id"],
+                    thread_ts=ctx["ts"],
+                    status="Thinking...",
+                )
+            except Exception:
+                pass
 
-            streamer = await async_client.chat_stream(
+            start_resp = await async_client.chat_startStream(
                 channel=ctx["channel_id"],
                 thread_ts=ctx["ts"],
+                markdown_text="",
                 recipient_team_id=team_id,
                 recipient_user_id=bot_user_id,
             )
+            stream_ts = start_resp["ts"]
 
             status_cleared = False
+            title_set = False
+            text_buffer = ""
+            BUFFER_SIZE = 256
             response_stream = None
 
             if agent:
-                response_stream = agent.arun(  # type: ignore[misc]
+                response_stream = agent.arun(
                     ctx["message_text"],
                     stream=True,
                     user_id=ctx["user"],
@@ -218,32 +245,32 @@ def attach_routes(
                     images=images if images else None,
                 )
             elif team:
-                response_stream = team.arun(
+                response_stream = team.arun(  # type: ignore[assignment]
                     ctx["message_text"],
                     stream=True,
                     user_id=ctx["user"],
                     session_id=ctx["ts"],
                     files=files if files else None,
                     images=images if images else None,
-                )  # type: ignore
+                )
             elif workflow:
-                response_stream = workflow.arun(
+                response_stream = workflow.arun(  # type: ignore[assignment]
                     ctx["message_text"],
                     stream=True,
                     user_id=ctx["user"],
                     session_id=ctx["ts"],
                     files=files if files else None,
                     images=images if images else None,
-                )  # type: ignore
+                )
 
             if response_stream is None:
-                await streamer.stop()
+                await async_client.chat_stopStream(channel=ctx["channel_id"], ts=stream_ts, markdown_text="")
                 return
 
             tool_tasks: dict[str, str] = {}
 
             async for chunk in response_stream:
-                if chunk.event == RunEvent.tool_call_started.value:  # type: ignore[union-attr]
+                if chunk.event in _TOOL_STARTED:  # type: ignore[union-attr]
                     tool_name = chunk.tool.tool_name if chunk.tool else "a tool"  # type: ignore[union-attr]
                     task_id = chunk.tool.tool_call_id if chunk.tool else str(len(tool_tasks))  # type: ignore[union-attr]
                     tool_args = chunk.tool.tool_args if chunk.tool else {}  # type: ignore[union-attr]
@@ -259,7 +286,9 @@ def attach_routes(
                     if details:
                         task_chunk["details"] = details
 
-                    await streamer.append(  # type: ignore[call-arg]
+                    await async_client.chat_appendStream(
+                        channel=ctx["channel_id"],
+                        ts=stream_ts,
                         markdown_text="",
                         chunks=[
                             {"type": "plan_update", "title": "Working on it..."},
@@ -267,7 +296,7 @@ def attach_routes(
                         ],
                     )
 
-                elif chunk.event == RunEvent.tool_call_completed.value:  # type: ignore[union-attr]
+                elif chunk.event in _TOOL_COMPLETED:  # type: ignore[union-attr]
                     task_id = chunk.tool.tool_call_id if chunk.tool else None  # type: ignore[union-attr]
                     if task_id and task_id in tool_tasks:
                         errored = chunk.tool.tool_call_error if chunk.tool else False  # type: ignore[union-attr]
@@ -277,19 +306,65 @@ def attach_routes(
                             "title": tool_tasks[task_id],
                             "status": "error" if errored else "complete",
                         }
-                        await streamer.append(markdown_text="", chunks=[task_chunk])  # type: ignore[call-arg]
-
-                if chunk.event == RunEvent.run_content.value and chunk.content:  # type: ignore[union-attr]
-                    if not status_cleared:
-                        await async_client.assistant_threads_setStatus(
-                            channel_id=ctx["channel_id"],
-                            thread_ts=ctx["ts"],
-                            status="",
+                        await async_client.chat_appendStream(
+                            channel=ctx["channel_id"],
+                            ts=stream_ts,
+                            markdown_text="",
+                            chunks=[task_chunk],
                         )
-                        status_cleared = True
-                    await streamer.append(markdown_text=str(chunk.content))
 
-            await streamer.stop()
+                content_text: Optional[str] = None
+                if chunk.event in _CONTENT_EVENTS and chunk.content:  # type: ignore[union-attr]
+                    content_text = str(chunk.content)
+                elif chunk.event in _STEP_OUTPUT and chunk.content:  # type: ignore[union-attr]
+                    content_text = str(chunk.content)
+
+                if content_text:
+                    if not status_cleared:
+                        try:
+                            await async_client.assistant_threads_setStatus(
+                                channel_id=ctx["channel_id"],
+                                thread_ts=ctx["ts"],
+                                status="",
+                            )
+                        except Exception:
+                            pass
+                        status_cleared = True
+                    if not title_set:
+                        title = ctx["message_text"][:50].strip() or "New conversation"
+                        try:
+                            await async_client.assistant_threads_setTitle(
+                                channel_id=ctx["channel_id"],
+                                thread_ts=ctx["ts"],
+                                title=title,
+                            )
+                        except Exception:
+                            pass
+                        title_set = True
+
+                    text_buffer += content_text
+                    if len(text_buffer) >= BUFFER_SIZE:
+                        await async_client.chat_appendStream(
+                            channel=ctx["channel_id"],
+                            ts=stream_ts,
+                            markdown_text=text_buffer,
+                        )
+                        text_buffer = ""
+
+            if not status_cleared:
+                try:
+                    await async_client.assistant_threads_setStatus(
+                        channel_id=ctx["channel_id"],
+                        thread_ts=ctx["ts"],
+                        status="",
+                    )
+                except Exception:
+                    pass
+            await async_client.chat_stopStream(
+                channel=ctx["channel_id"],
+                ts=stream_ts,
+                markdown_text=text_buffer,
+            )
         except Exception as e:
             log_error(f"Error streaming slack response: {e}")
             try:
@@ -300,12 +375,38 @@ def attach_routes(
                 )
             except Exception:
                 pass
+            if stream_ts:
+                try:
+                    await async_client.chat_stopStream(channel=ctx["channel_id"], ts=stream_ts, markdown_text="")
+                except Exception:
+                    pass
             _send_slack_message(
                 slack_tools,
                 channel=ctx["channel_id"],
                 message="Sorry, there was an error processing your message.",
                 thread_ts=ctx["ts"],
             )
+
+    async def _handle_thread_started(event: dict, token: str):
+        from slack_sdk.web.async_client import AsyncWebClient
+
+        async_client = AsyncWebClient(token=token)
+        thread_info = event.get("assistant_thread", {})
+        channel_id = thread_info.get("channel_id", "")
+        thread_ts = thread_info.get("thread_ts", "")
+        if not channel_id or not thread_ts:
+            return
+        try:
+            await async_client.assistant_threads_setSuggestedPrompts(
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                prompts=[
+                    {"title": "Help", "message": "What can you help me with?"},
+                    {"title": "Search", "message": "Search the web for..."},
+                ],
+            )
+        except Exception as e:
+            log_error(f"Failed to set suggested prompts: {e}")
 
     def _download_event_files(slack_tools: SlackTools, event: dict) -> Tuple[List[File], List[Image]]:
         files: List[File] = []

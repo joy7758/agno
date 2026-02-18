@@ -2,13 +2,16 @@
 Streaming
 =========
 
-Demonstrates streaming responses in Slack using the chat_stream API.
+Demonstrates streaming responses in Slack using the chat_startStream/appendStream/stopStream API.
 Tokens are delivered in real-time as the agent generates them, and tool
 calls are shown as progress updates in Slack's plan display.
 
 Requirements:
   - Your Slack app must have the ``assistant:write`` scope enabled.
-  - Event Subscriptions must be configured for ``app_mention`` and/or ``message.im``.
+  - Event Subscriptions must be configured for ``app_mention``, ``message.im``,
+    and ``assistant_thread_started`` (for suggested prompts).
+  - The ``assistant_thread_started`` event enables suggested prompts when a
+    user opens a new thread with the bot.
 """
 
 from agno.agent import Agent
