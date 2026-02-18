@@ -90,7 +90,7 @@ class ModelMetrics:
         self.reasoning_tokens += other.reasoning_tokens or 0
         # Sum cost
         if other.cost is not None:
-            self.cost = (self.cost or 0) + other.cost
+            self.cost = (self.cost if self.cost is not None else 0) + other.cost
         if other.total_runs > 0:
             self.total_runs += other.total_runs
             if other.average_duration is not None:
@@ -627,7 +627,7 @@ def accumulate_model_metrics(
 
     # Accumulate cost
     if usage.cost is not None:
-        run_response.metrics.cost = (run_response.metrics.cost or 0) + usage.cost
+        run_response.metrics.cost = (run_response.metrics.cost if run_response.metrics.cost is not None else 0) + usage.cost
 
     # Handle time_to_first_token: only set top-level if model_type is "model" or "reasoning_model"
     # and current value is None or later (we want the earliest)
@@ -691,7 +691,7 @@ def accumulate_eval_metrics(
 
     # Accumulate cost
     if eval_metrics.cost is not None:
-        run_response.metrics.cost = (run_response.metrics.cost or 0) + eval_metrics.cost
+        run_response.metrics.cost = (run_response.metrics.cost if run_response.metrics.cost is not None else 0) + eval_metrics.cost
 
     # Accumulate eval duration
     if eval_metrics.duration is not None:
