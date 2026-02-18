@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, List, Optional, TypeVar
 F = TypeVar("F", bound=Callable)
 
 
-def hitl(
+def pause(
     name: Optional[str] = None,
     requires_confirmation: bool = False,
     confirmation_message: Optional[str] = None,
@@ -39,11 +39,11 @@ def hitl(
 
     Example:
         ```python
-        from agno.workflow.decorators import hitl
+        from agno.workflow.decorators import pause
         from agno.workflow.types import StepInput, StepOutput
 
         # Confirmation-based HITL
-        @hitl(
+        @pause(
             name="Delete Records",
             requires_confirmation=True,
             confirmation_message="About to delete records. Confirm?"
@@ -52,7 +52,7 @@ def hitl(
             return StepOutput(content="Records deleted")
 
         # User input-based HITL
-        @hitl(
+        @pause(
             name="Process with Parameters",
             requires_user_input=True,
             user_input_message="Please provide processing parameters:",
@@ -96,8 +96,8 @@ def hitl(
     return decorator
 
 
-def get_hitl_metadata(func: Callable) -> dict:
-    """Extract HITL metadata from a function if it has been decorated with @hitl.
+def get_pause_metadata(func: Callable) -> dict:
+    """Extract HITL metadata from a function if it has been decorated with @pause.
 
     Args:
         func: The function to extract metadata from.
@@ -131,8 +131,8 @@ def get_hitl_metadata(func: Callable) -> dict:
     return metadata
 
 
-def has_hitl_metadata(func: Callable) -> bool:
-    """Check if a function has HITL metadata from the @hitl decorator.
+def has_pause_metadata(func: Callable) -> bool:
+    """Check if a function has HITL metadata from the @pause decorator.
 
     Args:
         func: The function to check.

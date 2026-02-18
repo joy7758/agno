@@ -11,7 +11,7 @@ Use case: Collecting parameters from the user before processing data.
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from agno.models.openai import OpenAIChat
-from agno.workflow.decorators import hitl
+from agno.workflow.decorators import pause
 from agno.workflow.step import Step
 from agno.workflow.types import StepInput, StepOutput
 from agno.workflow.workflow import Workflow
@@ -28,7 +28,7 @@ def analyze_data(step_input: StepInput) -> StepOutput:
 
 
 # Step 2: Process with user-provided parameters (HITL - user input)
-@hitl(
+@pause(
     name="Process Data",
     requires_user_input=True,
     user_input_message="Please provide processing parameters:",
@@ -94,7 +94,7 @@ writer_agent = Agent(
 analyze_step = Step(name="analyze_data", executor=analyze_data)
 process_step = Step(
     name="process_data", executor=process_with_params
-)  # @hitl auto-detected
+)  # @pause auto-detected
 report_step = Step(name="generate_report", agent=writer_agent)
 
 # Create workflow

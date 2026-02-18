@@ -123,9 +123,9 @@ class Step:
     ):
         # Auto-detect HITL metadata from @hitl decorator on executor function
         if executor is not None:
-            from agno.workflow.decorators import get_hitl_metadata
+            from agno.workflow.decorators import get_pause_metadata
 
-            hitl_metadata = get_hitl_metadata(executor)
+            hitl_metadata = get_pause_metadata(executor)
             if hitl_metadata:
                 # Use decorator values as defaults, but allow explicit params to override
                 if name is None and hitl_metadata.get("name"):

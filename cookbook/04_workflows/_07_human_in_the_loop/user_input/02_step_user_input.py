@@ -2,7 +2,7 @@
 Step-Level User Input HITL Example
 
 This example demonstrates how to pause a workflow to collect user input
-using Step parameters directly (without the @hitl decorator).
+using Step parameters directly (without the @pause decorator).
 
 This approach is useful when:
 - Using agent-based steps that need user parameters
@@ -143,7 +143,7 @@ if __name__ == "__main__":
     print("Step-Level User Input HITL Example")
     print("=" * 60)
     print("\nThis example uses Step parameters for HITL configuration.")
-    print("No @hitl decorator needed - configure directly on Step.\n")
+    print("No @pause decorator needed - configure directly on Step.\n")
 
     # Run the agent-based workflow
     run_output = workflow.run("Python async programming")

@@ -3,18 +3,18 @@ Test script demonstrating Step-level Human-In-The-Loop (HITL) functionality.
 
 This example shows a blog post workflow where:
 1. Research agent gathers information (no confirmation)
-2. Custom function processes the research (HITL via @hitl decorator)
+2. Custom function processes the research (HITL via @pause decorator)
 3. Writer agent creates the final post (no confirmation)
 
 Two approaches for HITL:
 1. Flag-based: Using requires_confirmation=True on Step
-2. Decorator-based: Using @hitl decorator on custom functions
+2. Decorator-based: Using @pause decorator on custom functions
 """
 
 from agno.agent import Agent
 from agno.db.postgres import PostgresDb
 from agno.models.openai import OpenAIChat
-from agno.workflow.decorators import hitl
+from agno.workflow.decorators import pause
 from agno.workflow.step import Step
 from agno.workflow.types import StepInput, StepOutput
 from agno.workflow.workflow import Workflow
@@ -37,9 +37,9 @@ research_agent = Agent(
 
 
 # ============================================================
-# Step 2: Process research (requires confirmation via @hitl decorator)
+# Step 2: Process research (requires confirmation via @pause decorator)
 # ============================================================
-@hitl(
+@pause(
     name="Process Research",
     requires_confirmation=True,
     confirmation_message="Research complete. Ready to generate blog post. Proceed?",
@@ -70,7 +70,7 @@ writer_agent = Agent(
 research_step = Step(name="research", agent=research_agent)
 process_step = Step(
     name="process_research", executor=process_research
-)  # @hitl auto-detected
+)  # @pause auto-detected
 write_step = Step(name="write_post", agent=writer_agent)
 
 # Create workflow
