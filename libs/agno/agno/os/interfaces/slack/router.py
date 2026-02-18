@@ -266,26 +266,38 @@ def attach_routes(
                 if chunk.event == RunEvent.tool_call_started:
                     tool_name = chunk.tool.tool_name if chunk.tool else "a tool"
                     task_id = chunk.tool.tool_call_id if chunk.tool else str(len(tool_tasks))
+                    tool_args = chunk.tool.tool_args if chunk.tool else {}
                     tool_tasks[task_id] = tool_name
+
+                    details = ", ".join(f"{k}={v}" for k, v in tool_args.items()) if tool_args else None
+                    task_chunk: dict = {
+                        "type": "task_update",
+                        "id": task_id,
+                        "title": tool_name,
+                        "status": "in_progress",
+                    }
+                    if details:
+                        task_chunk["details"] = details
+
                     await streamer.append(chunks=[
                         {"type": "plan_update", "title": "Working on it..."},
-                        {
-                            "type": "task_update",
-                            "id": task_id,
-                            "title": tool_name,
-                            "status": "in_progress",
-                        },
+                        task_chunk,
                     ])
 
-                if chunk.event == RunEvent.tool_call_completed:
+                elif chunk.event == RunEvent.tool_call_completed:
                     task_id = chunk.tool.tool_call_id if chunk.tool else None
                     if task_id and task_id in tool_tasks:
-                        await streamer.append(chunks=[{
+                        errored = chunk.tool.tool_call_error if chunk.tool else False
+                        task_chunk = {
                             "type": "task_update",
                             "id": task_id,
                             "title": tool_tasks[task_id],
-                            "status": "complete",
-                        }])
+                            "status": "error" if errored else "complete",
+                        }
+                        if chunk.content:
+                            task_chunk["output"] = str(chunk.content)
+
+                        await streamer.append(chunks=[task_chunk])
 
                 if chunk.event == RunEvent.run_content and chunk.content:
                     if not status_cleared:
