@@ -12,6 +12,7 @@ from agno.os.interfaces.slack import Slack
 from agno.os.interfaces.whatsapp import Whatsapp
 from agno.registry import Registry
 from agno.tools.mcp import MCPTools
+from agno import __version__ as agno_version
 
 # --- Setup ---
 
@@ -40,7 +41,9 @@ agui_interface = AGUI(agent=agent)
 a2a_interface = A2A(agents=[agent])
 
 agent_os = AgentOS(
-    name="Documentation all API references",
+    name="Agno SDK API Reference",
+    description="The all-in-one, private, secure agent platform that runs in your cloud.",
+    version=agno_version, 
     agents=[agent],
     registry=registry,
     db=db,
