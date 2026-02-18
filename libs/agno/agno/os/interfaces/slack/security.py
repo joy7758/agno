@@ -17,7 +17,7 @@ except Exception as e:
 def verify_slack_signature(
     body: bytes, timestamp: str, slack_signature: str, signing_secret: Optional[str] = None
 ) -> bool:
-    secret = signing_secret or SLACK_SIGNING_SECRET
+    secret = signing_secret if signing_secret is not None else SLACK_SIGNING_SECRET
     if not secret:
         raise HTTPException(status_code=500, detail="SLACK_SIGNING_SECRET is not set")
 

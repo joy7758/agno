@@ -14,6 +14,8 @@ from fastapi.testclient import TestClient
 def _install_fake_slack_sdk():
     slack_sdk = types.ModuleType("slack_sdk")
     slack_sdk_errors = types.ModuleType("slack_sdk.errors")
+    slack_sdk_web = types.ModuleType("slack_sdk.web")
+    slack_sdk_web_async = types.ModuleType("slack_sdk.web.async_client")
 
     class SlackApiError(Exception):
         def __init__(self, message="error", response=None):
@@ -24,10 +26,17 @@ def _install_fake_slack_sdk():
         def __init__(self, token=None):
             self.token = token
 
+    class AsyncWebClient:
+        def __init__(self, token=None):
+            self.token = token
+
     slack_sdk.WebClient = WebClient
     slack_sdk_errors.SlackApiError = SlackApiError
+    slack_sdk_web_async.AsyncWebClient = AsyncWebClient
     sys.modules.setdefault("slack_sdk", slack_sdk)
     sys.modules.setdefault("slack_sdk.errors", slack_sdk_errors)
+    sys.modules.setdefault("slack_sdk.web", slack_sdk_web)
+    sys.modules.setdefault("slack_sdk.web.async_client", slack_sdk_web_async)
 
 
 _install_fake_slack_sdk()
@@ -460,3 +469,366 @@ async def _wait_for_agent_call(agent_mock: AsyncMock, timeout: float = 5.0):
     while not agent_mock.arun.called and elapsed < timeout:
         await asyncio.sleep(0.1)
         elapsed += 0.1
+
+
+async def _wait_for_mock_call(mock_method, timeout: float = 5.0):
+    import asyncio
+
+    elapsed = 0.0
+    while not mock_method.called and elapsed < timeout:
+        await asyncio.sleep(0.1)
+        elapsed += 0.1
+
+
+@pytest.mark.asyncio
+async def test_should_respond_app_mention():
+    """app_mention events always trigger a response regardless of reply_to_mentions_only."""
+    agent_mock = _make_agent_mock()
+    mock_slack = _make_slack_mock()
+
+    with (
+        patch("agno.os.interfaces.slack.router.verify_slack_signature", return_value=True),
+        patch("agno.os.interfaces.slack.router.SlackTools", return_value=mock_slack),
+    ):
+        app = _build_app(agent_mock, reply_to_mentions_only=True)
+        client = TestClient(app)
+        body = {
+            "type": "event_callback",
+            "event": {
+                "type": "app_mention",
+                "text": "<@U123> hello",
+                "user": "U456",
+                "channel": "C123",
+                "ts": str(time.time()),
+            },
+        }
+        response = _make_signed_request(client, body)
+        assert response.status_code == 200
+        await _wait_for_agent_call(agent_mock)
+        agent_mock.arun.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_should_respond_dm():
+    """DM messages always trigger a response regardless of reply_to_mentions_only."""
+    agent_mock = _make_agent_mock()
+    mock_slack = _make_slack_mock()
+
+    with (
+        patch("agno.os.interfaces.slack.router.verify_slack_signature", return_value=True),
+        patch("agno.os.interfaces.slack.router.SlackTools", return_value=mock_slack),
+    ):
+        app = _build_app(agent_mock, reply_to_mentions_only=True)
+        client = TestClient(app)
+        body = {
+            "type": "event_callback",
+            "event": {
+                "type": "message",
+                "channel_type": "im",
+                "text": "hello",
+                "user": "U456",
+                "channel": "D123",
+                "ts": str(time.time()),
+            },
+        }
+        response = _make_signed_request(client, body)
+        assert response.status_code == 200
+        await _wait_for_agent_call(agent_mock)
+        agent_mock.arun.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_channel_message_blocked_when_mentions_only():
+    """Channel messages are blocked when reply_to_mentions_only=True."""
+    import asyncio
+
+    agent_mock = _make_agent_mock()
+    mock_slack = _make_slack_mock()
+
+    with (
+        patch("agno.os.interfaces.slack.router.verify_slack_signature", return_value=True),
+        patch("agno.os.interfaces.slack.router.SlackTools", return_value=mock_slack),
+    ):
+        app = _build_app(agent_mock, reply_to_mentions_only=True)
+        client = TestClient(app)
+        body = {
+            "type": "event_callback",
+            "event": {
+                "type": "message",
+                "channel_type": "channel",
+                "text": "hello",
+                "user": "U456",
+                "channel": "C123",
+                "ts": str(time.time()),
+            },
+        }
+        response = _make_signed_request(client, body)
+        assert response.status_code == 200
+        await asyncio.sleep(0.5)
+        agent_mock.arun.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_thread_reply_blocked_when_mentions_only():
+    """Thread replies in channels are blocked when reply_to_mentions_only=True (Bug #4 fix)."""
+    import asyncio
+
+    agent_mock = _make_agent_mock()
+    mock_slack = _make_slack_mock()
+
+    with (
+        patch("agno.os.interfaces.slack.router.verify_slack_signature", return_value=True),
+        patch("agno.os.interfaces.slack.router.SlackTools", return_value=mock_slack),
+    ):
+        app = _build_app(agent_mock, reply_to_mentions_only=True)
+        client = TestClient(app)
+        body = {
+            "type": "event_callback",
+            "event": {
+                "type": "message",
+                "channel_type": "channel",
+                "text": "hello in thread",
+                "user": "U456",
+                "channel": "C123",
+                "ts": "1234567890.000002",
+                "thread_ts": "1234567890.000001",
+            },
+        }
+        response = _make_signed_request(client, body)
+        assert response.status_code == 200
+        await asyncio.sleep(0.5)
+        agent_mock.arun.assert_not_called()
+
+
+def test_bot_subtype_blocked():
+    """Events with bot_message subtype are blocked."""
+    agent_mock = _make_agent_mock()
+    mock_slack = _make_slack_mock()
+
+    with (
+        patch("agno.os.interfaces.slack.router.verify_slack_signature", return_value=True),
+        patch("agno.os.interfaces.slack.router.SlackTools", return_value=mock_slack),
+    ):
+        app = _build_app(agent_mock, reply_to_mentions_only=False)
+        client = TestClient(app)
+        body = {
+            "type": "event_callback",
+            "event": {
+                "type": "message",
+                "subtype": "bot_message",
+                "channel_type": "im",
+                "text": "bot says hi",
+                "user": "U456",
+                "channel": "C123",
+                "ts": str(time.time()),
+            },
+        }
+        response = _make_signed_request(client, body)
+        assert response.status_code == 200
+        agent_mock.arun.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_file_share_subtype_not_blocked():
+    """Events with file_share subtype should NOT be blocked (Bug #3 fix)."""
+    agent_mock = _make_agent_mock()
+    mock_slack = _make_slack_mock()
+    mock_slack.download_file_bytes = Mock(return_value=b"file-data")
+
+    with (
+        patch("agno.os.interfaces.slack.router.verify_slack_signature", return_value=True),
+        patch("agno.os.interfaces.slack.router.SlackTools", return_value=mock_slack),
+    ):
+        app = _build_app(agent_mock, reply_to_mentions_only=False)
+        client = TestClient(app)
+        body = {
+            "type": "event_callback",
+            "event": {
+                "type": "message",
+                "subtype": "file_share",
+                "channel_type": "im",
+                "text": "check this file",
+                "user": "U456",
+                "channel": "C123",
+                "ts": str(time.time()),
+                "files": [{"id": "F1", "name": "doc.txt", "mimetype": "text/plain"}],
+            },
+        }
+        response = _make_signed_request(client, body)
+        assert response.status_code == 200
+        await _wait_for_agent_call(agent_mock)
+        agent_mock.arun.assert_called_once()
+
+
+def test_signing_secret_empty_string_not_fallback():
+    """signing_secret='' should NOT fall back to env SLACK_SIGNING_SECRET (Bug #7 fix)."""
+    from agno.os.interfaces.slack import security as sec_mod
+
+    body = b'{"test": true}'
+    timestamp = str(int(time.time()))
+
+    original = sec_mod.SLACK_SIGNING_SECRET
+    try:
+        sec_mod.SLACK_SIGNING_SECRET = "env-secret"
+        with pytest.raises(Exception):
+            sec_mod.verify_slack_signature(body, timestamp, "v0=fake", signing_secret="")
+    finally:
+        sec_mod.SLACK_SIGNING_SECRET = original
+
+
+def test_retry_header_skips_processing():
+    """X-Slack-Retry-Num header should cause early return without processing."""
+    agent_mock = _make_agent_mock()
+    mock_slack = _make_slack_mock()
+
+    with (
+        patch("agno.os.interfaces.slack.router.verify_slack_signature", return_value=True),
+        patch("agno.os.interfaces.slack.router.SlackTools", return_value=mock_slack),
+    ):
+        app = _build_app(agent_mock)
+        client = TestClient(app)
+        body = {
+            "type": "event_callback",
+            "event": {
+                "type": "message",
+                "channel_type": "im",
+                "text": "retry message",
+                "user": "U456",
+                "channel": "C123",
+                "ts": str(time.time()),
+            },
+        }
+        body_bytes = json.dumps(body).encode()
+        timestamp = str(int(time.time()))
+        sig_base = f"v0:{timestamp}:{body_bytes.decode()}"
+        signature = "v0=" + hmac.new(SIGNING_SECRET.encode(), sig_base.encode(), hashlib.sha256).hexdigest()
+        response = client.post(
+            "/events",
+            content=body_bytes,
+            headers={
+                "Content-Type": "application/json",
+                "X-Slack-Request-Timestamp": timestamp,
+                "X-Slack-Signature": signature,
+                "X-Slack-Retry-Num": "1",
+                "X-Slack-Retry-Reason": "http_timeout",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+        agent_mock.arun.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_streaming_dispatches_stream_handler():
+    """streaming=True should route events through the streaming handler."""
+    agent_mock = AsyncMock()
+
+    async def _arun_stream(*args, **kwargs):
+        return
+        yield  # noqa: RET504 — makes this an async generator
+
+    agent_mock.arun = _arun_stream
+    agent_mock.name = "Test Agent"
+
+    mock_slack = _make_slack_mock()
+    mock_slack.token = "xoxb-test"
+
+    mock_async_client = AsyncMock()
+    mock_async_client.assistant_threads_setStatus = AsyncMock()
+    mock_async_client.chat_startStream = AsyncMock(return_value={"ts": "123.456"})
+    mock_async_client.chat_stopStream = AsyncMock()
+
+    with (
+        patch("agno.os.interfaces.slack.router.verify_slack_signature", return_value=True),
+        patch("agno.os.interfaces.slack.router.SlackTools", return_value=mock_slack),
+        patch("slack_sdk.web.async_client.AsyncWebClient", return_value=mock_async_client),
+    ):
+        app = _build_app(agent_mock, streaming=True, reply_to_mentions_only=False)
+        client = TestClient(app)
+        body = {
+            "type": "event_callback",
+            "team_id": "T123",
+            "authorizations": [{"user_id": "B123"}],
+            "event": {
+                "type": "message",
+                "channel_type": "im",
+                "text": "hello stream",
+                "user": "U456",
+                "channel": "C123",
+                "ts": str(time.time()),
+            },
+        }
+        response = _make_signed_request(client, body)
+        assert response.status_code == 200
+        await _wait_for_mock_call(mock_async_client.chat_stopStream)
+        mock_async_client.chat_startStream.assert_called_once()
+        mock_async_client.chat_stopStream.assert_called_once()
+        # Status should have been set to "Thinking..." then cleared
+        status_calls = mock_async_client.assistant_threads_setStatus.call_args_list
+        assert len(status_calls) >= 2
+        assert status_calls[0].kwargs.get("status") == "Thinking..."
+        assert status_calls[-1].kwargs.get("status") == ""
+
+
+@pytest.mark.asyncio
+async def test_empty_authorizations_uses_none():
+    """Missing authorizations should result in None IDs, not empty strings (Bug #5 fix)."""
+    agent_mock = AsyncMock()
+
+    async def _arun_stream(*args, **kwargs):
+        return
+        yield  # noqa: RET504
+
+    agent_mock.arun = _arun_stream
+    agent_mock.name = "Test Agent"
+
+    mock_slack = _make_slack_mock()
+    mock_slack.token = "xoxb-test"
+
+    mock_async_client = AsyncMock()
+    mock_async_client.assistant_threads_setStatus = AsyncMock()
+    mock_async_client.chat_startStream = AsyncMock(return_value={"ts": "123.456"})
+    mock_async_client.chat_stopStream = AsyncMock()
+
+    with (
+        patch("agno.os.interfaces.slack.router.verify_slack_signature", return_value=True),
+        patch("agno.os.interfaces.slack.router.SlackTools", return_value=mock_slack),
+        patch("slack_sdk.web.async_client.AsyncWebClient", return_value=mock_async_client),
+    ):
+        app = _build_app(agent_mock, streaming=True, reply_to_mentions_only=False)
+        client = TestClient(app)
+        body = {
+            "type": "event_callback",
+            "event": {
+                "type": "message",
+                "channel_type": "im",
+                "text": "hello",
+                "user": "U456",
+                "channel": "C123",
+                "ts": str(time.time()),
+            },
+        }
+        response = _make_signed_request(client, body)
+        assert response.status_code == 200
+        await _wait_for_mock_call(mock_async_client.chat_stopStream)
+        call_kwargs = mock_async_client.chat_startStream.call_args.kwargs
+        assert call_kwargs.get("recipient_team_id") is None
+        assert call_kwargs.get("recipient_user_id") is None
+
+
+def test_team_event_mapping():
+    """Team and workflow event strings are correctly mapped in event sets (Bug #1 fix)."""
+    from agno.agent import RunEvent
+    from agno.os.interfaces.slack.router import _CONTENT_EVENTS, _STEP_OUTPUT, _TOOL_COMPLETED, _TOOL_STARTED
+    from agno.run.team import TeamRunEvent
+    from agno.run.workflow import WorkflowRunEvent
+
+    assert RunEvent.tool_call_started.value in _TOOL_STARTED
+    assert RunEvent.tool_call_completed.value in _TOOL_COMPLETED
+    assert RunEvent.run_content.value in _CONTENT_EVENTS
+
+    assert TeamRunEvent.tool_call_started.value in _TOOL_STARTED
+    assert TeamRunEvent.tool_call_completed.value in _TOOL_COMPLETED
+    assert TeamRunEvent.run_content.value in _CONTENT_EVENTS
+
+    assert WorkflowRunEvent.step_output.value in _STEP_OUTPUT
