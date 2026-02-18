@@ -158,108 +158,7 @@ def print_response(
             live_console.update(Group(*panels))
 
         if isinstance(run_response, TeamRunOutput):
-            # Handle member responses
-            if show_member_responses:
-                for member_response in run_response.member_responses:
-                    # Handle member reasoning
-                    reasoning_steps = []
-                    if isinstance(member_response, RunOutput) and member_response.reasoning_steps is not None:
-                        reasoning_steps.extend(member_response.reasoning_steps)
-
-                    if len(reasoning_steps) > 0 and show_reasoning:
-                        # Create panels for reasoning steps
-                        for i, step in enumerate(reasoning_steps, 1):
-                            member_reasoning_panel = build_reasoning_step_panel(
-                                i, step, show_full_reasoning, color="magenta"
-                            )
-                            panels.append(member_reasoning_panel)
-
-                    # Add tool calls panel for member if available
-                    if hasattr(member_response, "tools") and member_response.tools:
-                        member_name = None
-                        if isinstance(member_response, RunOutput) and member_response.agent_id is not None:
-                            member_name = team._get_member_name(member_response.agent_id)
-                        elif isinstance(member_response, TeamRunOutput) and member_response.team_id is not None:
-                            member_name = team._get_member_name(member_response.team_id)
-
-                        if member_name:
-                            formatted_calls = format_tool_calls(member_response.tools)
-                            if formatted_calls:
-                                console_width = console.width if console else 80
-                                panel_width = console_width + 30
-
-                                lines = []
-                                for call in formatted_calls:
-                                    wrapped_call = textwrap.fill(f"• {call}", width=panel_width, subsequent_indent="  ")
-                                    lines.append(wrapped_call)
-
-                                tool_calls_text = "\n\n".join(lines)
-
-                                member_tool_calls_panel = create_panel(
-                                    content=tool_calls_text,
-                                    title=f"{member_name} Tool Calls",
-                                    border_style="yellow",
-                                )
-                                panels.append(member_tool_calls_panel)
-                                live_console.update(Group(*panels))
-
-                    show_markdown = False
-                    if member_markdown:
-                        if isinstance(member_response, RunOutput) and member_response.agent_id is not None:
-                            show_markdown = member_markdown.get(member_response.agent_id, False)
-                        elif isinstance(member_response, TeamRunOutput) and member_response.team_id is not None:
-                            show_markdown = member_markdown.get(member_response.team_id, False)
-
-                    member_response_content: Union[str, JSON, Markdown] = _parse_response_content(  # type: ignore
-                        member_response,
-                        tags_to_include_in_markdown,
-                        show_markdown=show_markdown,
-                    )
-
-                    # Create panel for member response
-                    if isinstance(member_response, RunOutput) and member_response.agent_id is not None:
-                        member_response_panel = create_panel(
-                            content=member_response_content,
-                            title=f"{team._get_member_name(member_response.agent_id)} Response",
-                            border_style="magenta",
-                        )
-                    elif isinstance(member_response, TeamRunOutput) and member_response.team_id is not None:
-                        member_response_panel = create_panel(
-                            content=member_response_content,
-                            title=f"{team._get_member_name(member_response.team_id)} Response",
-                            border_style="magenta",
-                        )
-                    panels.append(member_response_panel)
-
-                    if member_response.citations is not None and member_response.citations.urls is not None:
-                        md_lines = []
-
-                        # Add search queries if present
-                        if member_response.citations.search_queries:
-                            md_lines.append("**Search Queries:**")
-                            for query in member_response.citations.search_queries:
-                                md_lines.append(f"- {query}")
-                            md_lines.append("")  # Empty line before URLs
-
-                        # Add URL citations
-                        md_lines.extend(
-                            f"{i + 1}. [{citation.title or citation.url}]({citation.url})"
-                            for i, citation in enumerate(member_response.citations.urls)
-                            if citation.url  # Only include citations with valid URLs
-                        )
-
-                        md_content = "\n".join(md_lines)
-                        if md_content:  # Only create panel if there are citations
-                            citations_panel = create_panel(
-                                content=Markdown(md_content),
-                                title="Citations",
-                                border_style="magenta",
-                            )
-                            panels.append(citations_panel)
-
-                live_console.update(Group(*panels))
-
-            # Add team level tool calls panel if available
+            # Add team level tool calls panel before member responses
             if run_response.tools:
                 formatted_calls = format_tool_calls(run_response.tools)
                 if formatted_calls:
@@ -504,10 +403,9 @@ def print_response_stream(
                     if resp.run_input is not None:  # type: ignore
                         input_content = get_text_from_message(resp.run_input.input_content)  # type: ignore
 
-                # Collect team tool calls, avoiding duplicates
-                if resp.event == TeamRunEvent.tool_call_completed and resp.tool:  # type: ignore
+                # Collect team tool calls when they START so the panel appears before member responses
+                if resp.event == TeamRunEvent.tool_call_started and resp.tool:  # type: ignore
                     tool = resp.tool  # type: ignore
-                    # Generate a unique ID for this tool call
                     if tool.tool_call_id:
                         tool_id = tool.tool_call_id
                     else:
@@ -515,6 +413,28 @@ def print_response_stream(
                     if tool_id not in processed_tool_calls:
                         processed_tool_calls.add(tool_id)
                         team_tool_calls.append(tool)
+
+                # Update team tool calls when they COMPLETE (replaces the started entry)
+                if resp.event == TeamRunEvent.tool_call_completed and resp.tool:  # type: ignore
+                    tool = resp.tool  # type: ignore
+                    if tool.tool_call_id:
+                        tool_id = tool.tool_call_id
+                    else:
+                        tool_id = str(hash(str(tool)))
+                    if tool_id not in processed_tool_calls:
+                        processed_tool_calls.add(tool_id)
+                        team_tool_calls.append(tool)
+                    else:
+                        # Update the existing tool call with the completed version
+                        for i, existing_tool in enumerate(team_tool_calls):
+                            existing_id = (
+                                existing_tool.tool_call_id
+                                if existing_tool.tool_call_id
+                                else str(hash(str(existing_tool)))
+                            )
+                            if existing_id == tool_id:
+                                team_tool_calls[i] = tool
+                                break
 
             # Collect member tool calls, avoiding duplicates
             if show_member_responses and hasattr(resp, "member_responses") and resp.member_responses:
@@ -548,6 +468,10 @@ def print_response_stream(
             # Create new panels for each chunk
             panels = []
 
+            # Show status spinner above everything while waiting for response content
+            if not _response_content:
+                panels.append(status)
+
             if input_content and show_message:
                 render = True
                 # Convert message to a panel
@@ -574,9 +498,41 @@ def print_response_stream(
                     border_style="green",
                 )
                 panels.append(thinking_panel)
-            elif _response_content == "":
-                # Keep showing status if no content yet
-                panels.append(status)
+
+            # Add team tool calls panel before member responses
+            if team_tool_calls:
+                formatted_calls = format_tool_calls(team_tool_calls)
+                if formatted_calls:
+                    console_width = console.width if console else 80
+                    panel_width = console_width + 30
+
+                    lines = []
+                    # Create a set to track already added calls by their string representation
+                    added_calls = set()
+                    for call in formatted_calls:
+                        if call not in added_calls:
+                            added_calls.add(call)
+                            # Wrap the call text to fit within the panel
+                            wrapped_call = textwrap.fill(f"• {call}", width=panel_width, subsequent_indent="  ")
+                            lines.append(wrapped_call)
+
+                    # Join with blank lines between items
+                    tool_calls_text = "\n\n".join(lines)
+
+                    # Add compression stats if available (don't clear - will be cleared in final_panels)
+                    if team.compression_manager is not None and team.compression_manager.stats:
+                        stats = team.compression_manager.stats
+                        saved = stats.get("original_size", 0) - stats.get("compressed_size", 0)
+                        orig = stats.get("original_size", 1)
+                        if stats.get("tool_results_compressed", 0) > 0:
+                            tool_calls_text += f"\n\ncompressed: {stats.get('tool_results_compressed', 0)} | Saved: {saved:,} chars ({saved / orig * 100:.0f}%)"
+
+                    team_tool_calls_panel = create_panel(
+                        content=tool_calls_text,
+                        title="Team Tool Calls",
+                        border_style="yellow",
+                    )
+                    panels.append(team_tool_calls_panel)
 
             # Process member responses and their tool calls
             for member_response in (
@@ -637,43 +593,8 @@ def print_response_stream(
                     if member_id is not None:
                         member_response_panels[member_id] = member_response_panel
 
-            # Add team tool calls panel if available (before the team response)
-            if team_tool_calls:
-                formatted_calls = format_tool_calls(team_tool_calls)
-                if formatted_calls:
-                    console_width = console.width if console else 80
-                    panel_width = console_width + 30
-
-                    lines = []
-                    # Create a set to track already added calls by their string representation
-                    added_calls = set()
-                    for call in formatted_calls:
-                        if call not in added_calls:
-                            added_calls.add(call)
-                            # Wrap the call text to fit within the panel
-                            wrapped_call = textwrap.fill(f"• {call}", width=panel_width, subsequent_indent="  ")
-                            lines.append(wrapped_call)
-
-                    # Join with blank lines between items
-                    tool_calls_text = "\n\n".join(lines)
-
-                    # Add compression stats if available (don't clear - will be cleared in final_panels)
-                    if team.compression_manager is not None and team.compression_manager.stats:
-                        stats = team.compression_manager.stats
-                        saved = stats.get("original_size", 0) - stats.get("compressed_size", 0)
-                        orig = stats.get("original_size", 1)
-                        if stats.get("tool_results_compressed", 0) > 0:
-                            tool_calls_text += f"\n\ncompressed: {stats.get('tool_results_compressed', 0)} | Saved: {saved:,} chars ({saved / orig * 100:.0f}%)"
-
-                    team_tool_calls_panel = create_panel(
-                        content=tool_calls_text,
-                        title="Team Tool Calls",
-                        border_style="yellow",
-                    )
-                    panels.append(team_tool_calls_panel)
-
-            # Add the team response panel at the end
-            if response_content_stream:
+            # Add the team response panel at the end (only if there's actual content)
+            if _response_content:
                 render = True
                 # Create panel for response
                 response_panel = create_panel(
@@ -778,103 +699,7 @@ def print_response_stream(
             )
             final_panels.append(thinking_panel)
 
-        # Add member tool calls and responses in correct order
-        if show_member_responses and run_response is not None and hasattr(run_response, "member_responses"):
-            for i, member_response in enumerate(run_response.member_responses):  # type: ignore
-                member_id = None
-                if isinstance(member_response, RunOutput) and member_response.agent_id is not None:
-                    member_id = member_response.agent_id
-                elif isinstance(member_response, TeamRunOutput) and member_response.team_id is not None:
-                    member_id = member_response.team_id
-
-                if member_id:
-                    # First add tool calls if any
-                    if member_id in member_tool_calls and member_tool_calls[member_id]:
-                        formatted_calls = format_tool_calls(member_tool_calls[member_id])
-                        if formatted_calls:
-                            console_width = console.width if console else 80
-                            panel_width = console_width + 30
-
-                            lines = []
-                            for call in formatted_calls:
-                                wrapped_call = textwrap.fill(f"• {call}", width=panel_width, subsequent_indent="  ")
-                                lines.append(wrapped_call)
-
-                            tool_calls_text = "\n\n".join(lines)
-
-                            member_name = team._get_member_name(member_id)
-                            member_tool_calls_panel = create_panel(
-                                content=tool_calls_text,
-                                title=f"{member_name} Tool Calls",
-                                border_style="yellow",
-                            )
-                            final_panels.append(member_tool_calls_panel)
-
-                # Add reasoning steps if any
-                reasoning_steps = []
-                if member_response.reasoning_steps is not None:
-                    reasoning_steps = member_response.reasoning_steps
-                if reasoning_steps and show_reasoning:
-                    for j, step in enumerate(reasoning_steps, 1):
-                        member_reasoning_panel = build_reasoning_step_panel(
-                            j, step, show_full_reasoning, color="magenta"
-                        )
-                        final_panels.append(member_reasoning_panel)
-
-                # Then add response
-                show_markdown = False
-                if isinstance(member_response, RunOutput) and member_response.agent_id is not None:
-                    show_markdown = member_markdown.get(member_response.agent_id, False)
-                elif isinstance(member_response, TeamRunOutput) and member_response.team_id is not None:
-                    show_markdown = member_markdown.get(member_response.team_id, False)
-
-                member_response_content = _parse_response_content(  # type: ignore
-                    member_response,
-                    tags_to_include_in_markdown,
-                    show_markdown=show_markdown,
-                )
-
-                member_name = "Team Member"
-                if isinstance(member_response, RunOutput) and member_response.agent_id is not None:
-                    member_name = team._get_member_name(member_response.agent_id)
-                elif isinstance(member_response, TeamRunOutput) and member_response.team_id is not None:
-                    member_name = team._get_member_name(member_response.team_id)
-
-                member_response_panel = create_panel(
-                    content=member_response_content,
-                    title=f"{member_name} Response",
-                    border_style="magenta",
-                )
-                final_panels.append(member_response_panel)
-
-                # Add citations if any
-                if member_response.citations is not None and member_response.citations.urls is not None:
-                    md_lines = []
-
-                    # Add search queries if present
-                    if member_response.citations.search_queries:
-                        md_lines.append("**Search Queries:**")
-                        for query in member_response.citations.search_queries:
-                            md_lines.append(f"- {query}")
-                        md_lines.append("")  # Empty line before URLs
-
-                    # Add URL citations
-                    md_lines.extend(
-                        f"{i + 1}. [{citation.title or citation.url}]({citation.url})"
-                        for i, citation in enumerate(member_response.citations.urls)
-                        if citation.url  # Only include citations with valid URLs
-                    )
-
-                    md_content = "\n".join(md_lines)
-                    if md_content:  # Only create panel if there are citations
-                        citations_panel = create_panel(
-                            content=Markdown(md_content),
-                            title="Citations",
-                            border_style="magenta",
-                        )
-                        final_panels.append(citations_panel)
-
-        # Add team tool calls before team response
+        # Add team tool calls before member responses
         if team_tool_calls:
             formatted_calls = format_tool_calls(team_tool_calls)
             if formatted_calls:
@@ -1093,6 +918,39 @@ async def aprint_response(
             live_console.update(Group(*panels))
 
         if isinstance(run_response, TeamRunOutput):
+            # Add team level tool calls panel before member responses
+            if run_response.tools:
+                formatted_calls = format_tool_calls(run_response.tools)
+                if formatted_calls:
+                    console_width = console.width if console else 80
+                    # Allow for panel borders and padding
+                    panel_width = console_width + 30
+
+                    lines = []
+                    for call in formatted_calls:
+                        # Wrap the call text to fit within the panel
+                        wrapped_call = textwrap.fill(f"• {call}", width=panel_width, subsequent_indent="  ")
+                        lines.append(wrapped_call)
+
+                    tool_calls_text = "\n\n".join(lines)
+
+                    # Add compression stats at end of tool calls
+                    if team.compression_manager is not None and team.compression_manager.stats:
+                        stats = team.compression_manager.stats
+                        saved = stats.get("original_size", 0) - stats.get("compressed_size", 0)
+                        orig = stats.get("original_size", 1)
+                        if stats.get("tool_results_compressed", 0) > 0:
+                            tool_calls_text += f"\n\ncompressed: {stats.get('tool_results_compressed', 0)} | Saved: {saved:,} chars ({saved / orig * 100:.0f}%)"
+                        team.compression_manager.stats.clear()
+
+                    team_tool_calls_panel = create_panel(
+                        content=tool_calls_text,
+                        title="Team Tool Calls",
+                        border_style="yellow",
+                    )
+                    panels.append(team_tool_calls_panel)
+                    live_console.update(Group(*panels))
+
             # Handle member responses
             if show_member_responses:
                 for member_response in run_response.member_responses:
@@ -1193,39 +1051,6 @@ async def aprint_response(
                             panels.append(citations_panel)
 
                 live_console.update(Group(*panels))
-
-            # Add team level tool calls panel if available
-            if run_response.tools:
-                formatted_calls = format_tool_calls(run_response.tools)
-                if formatted_calls:
-                    console_width = console.width if console else 80
-                    # Allow for panel borders and padding
-                    panel_width = console_width + 30
-
-                    lines = []
-                    for call in formatted_calls:
-                        # Wrap the call text to fit within the panel
-                        wrapped_call = textwrap.fill(f"• {call}", width=panel_width, subsequent_indent="  ")
-                        lines.append(wrapped_call)
-
-                    tool_calls_text = "\n\n".join(lines)
-
-                    # Add compression stats at end of tool calls
-                    if team.compression_manager is not None and team.compression_manager.stats:
-                        stats = team.compression_manager.stats
-                        saved = stats.get("original_size", 0) - stats.get("compressed_size", 0)
-                        orig = stats.get("original_size", 1)
-                        if stats.get("tool_results_compressed", 0) > 0:
-                            tool_calls_text += f"\n\ncompressed: {stats.get('tool_results_compressed', 0)} | Saved: {saved:,} chars ({saved / orig * 100:.0f}%)"
-                        team.compression_manager.stats.clear()
-
-                    team_tool_calls_panel = create_panel(
-                        content=tool_calls_text,
-                        title="Team Tool Calls",
-                        border_style="yellow",
-                    )
-                    panels.append(team_tool_calls_panel)
-                    live_console.update(Group(*panels))
 
             response_content_batch: Union[str, JSON, Markdown] = _parse_response_content(  # type: ignore
                 run_response, tags_to_include_in_markdown, show_markdown=team_markdown
@@ -1436,10 +1261,9 @@ async def aprint_response_stream(
                     if resp.run_input is not None:  # type: ignore
                         input_content = get_text_from_message(resp.run_input.input_content)  # type: ignore
 
-                # Collect team tool calls, avoiding duplicates
-                if resp.event == TeamRunEvent.tool_call_completed and resp.tool:  # type: ignore
+                # Collect team tool calls when they START so the panel appears before member responses
+                if resp.event == TeamRunEvent.tool_call_started and resp.tool:  # type: ignore
                     tool = resp.tool  # type: ignore
-                    # Generate a unique ID for this tool call
                     if tool.tool_call_id is not None:
                         tool_id = tool.tool_call_id
                     else:
@@ -1447,6 +1271,28 @@ async def aprint_response_stream(
                     if tool_id not in processed_tool_calls:
                         processed_tool_calls.add(tool_id)
                         team_tool_calls.append(tool)
+
+                # Update team tool calls when they COMPLETE (replaces the started entry)
+                if resp.event == TeamRunEvent.tool_call_completed and resp.tool:  # type: ignore
+                    tool = resp.tool  # type: ignore
+                    if tool.tool_call_id is not None:
+                        tool_id = tool.tool_call_id
+                    else:
+                        tool_id = str(hash(str(tool)))
+                    if tool_id not in processed_tool_calls:
+                        processed_tool_calls.add(tool_id)
+                        team_tool_calls.append(tool)
+                    else:
+                        # Update the existing tool call with the completed version
+                        for i, existing_tool in enumerate(team_tool_calls):
+                            existing_id = (
+                                existing_tool.tool_call_id
+                                if existing_tool.tool_call_id is not None
+                                else str(hash(str(existing_tool)))
+                            )
+                            if existing_id == tool_id:
+                                team_tool_calls[i] = tool
+                                break
 
             # Collect member tool calls, avoiding duplicates
             if show_member_responses and hasattr(resp, "member_responses") and resp.member_responses:
@@ -1479,6 +1325,10 @@ async def aprint_response_stream(
             # Create new panels for each chunk
             panels = []
 
+            # Show status spinner above everything while waiting for response content
+            if not _response_content:
+                panels.append(status)
+
             if input_content and show_message:
                 render = True
                 # Convert message to a panel
@@ -1505,9 +1355,41 @@ async def aprint_response_stream(
                     border_style="green",
                 )
                 panels.append(thinking_panel)
-            elif _response_content == "":
-                # Keep showing status if no content yet
-                panels.append(status)
+
+            # Add team tool calls panel before member responses
+            if team_tool_calls:
+                formatted_calls = format_tool_calls(team_tool_calls)
+                if formatted_calls:
+                    console_width = console.width if console else 80
+                    panel_width = console_width + 30
+
+                    lines = []
+                    # Create a set to track already added calls by their string representation
+                    added_calls = set()
+                    for call in formatted_calls:
+                        if call not in added_calls:
+                            added_calls.add(call)
+                            # Wrap the call text to fit within the panel
+                            wrapped_call = textwrap.fill(f"• {call}", width=panel_width, subsequent_indent="  ")
+                            lines.append(wrapped_call)
+
+                    # Join with blank lines between items
+                    tool_calls_text = "\n\n".join(lines)
+
+                    # Add compression stats if available (don't clear - will be cleared in final_panels)
+                    if team.compression_manager is not None and team.compression_manager.stats:
+                        stats = team.compression_manager.stats
+                        saved = stats.get("original_size", 0) - stats.get("compressed_size", 0)
+                        orig = stats.get("original_size", 1)
+                        if stats.get("tool_results_compressed", 0) > 0:
+                            tool_calls_text += f"\n\ncompressed: {stats.get('tool_results_compressed', 0)} | Saved: {saved:,} chars ({saved / orig * 100:.0f}%)"
+
+                    team_tool_calls_panel = create_panel(
+                        content=tool_calls_text,
+                        title="Team Tool Calls",
+                        border_style="yellow",
+                    )
+                    panels.append(team_tool_calls_panel)
 
             # Process member responses and their tool calls
             for member_response in (
@@ -1568,43 +1450,8 @@ async def aprint_response_stream(
                     if member_id is not None:
                         member_response_panels[member_id] = member_response_panel
 
-            # Add team tool calls panel if available (before the team response)
-            if team_tool_calls:
-                formatted_calls = format_tool_calls(team_tool_calls)
-                if formatted_calls:
-                    console_width = console.width if console else 80
-                    panel_width = console_width + 30
-
-                    lines = []
-                    # Create a set to track already added calls by their string representation
-                    added_calls = set()
-                    for call in formatted_calls:
-                        if call not in added_calls:
-                            added_calls.add(call)
-                            # Wrap the call text to fit within the panel
-                            wrapped_call = textwrap.fill(f"• {call}", width=panel_width, subsequent_indent="  ")
-                            lines.append(wrapped_call)
-
-                    # Join with blank lines between items
-                    tool_calls_text = "\n\n".join(lines)
-
-                    # Add compression stats if available (don't clear - will be cleared in final_panels)
-                    if team.compression_manager is not None and team.compression_manager.stats:
-                        stats = team.compression_manager.stats
-                        saved = stats.get("original_size", 0) - stats.get("compressed_size", 0)
-                        orig = stats.get("original_size", 1)
-                        if stats.get("tool_results_compressed", 0) > 0:
-                            tool_calls_text += f"\n\ncompressed: {stats.get('tool_results_compressed', 0)} | Saved: {saved:,} chars ({saved / orig * 100:.0f}%)"
-
-                    team_tool_calls_panel = create_panel(
-                        content=tool_calls_text,
-                        title="Team Tool Calls",
-                        border_style="yellow",
-                    )
-                    panels.append(team_tool_calls_panel)
-
-            # Add the team response panel at the end
-            if response_content_stream:
+            # Add the team response panel at the end (only if there's actual content)
+            if _response_content:
                 render = True
                 # Create panel for response
                 response_panel = create_panel(
@@ -1709,6 +1556,41 @@ async def aprint_response_stream(
                 border_style="green",
             )
             final_panels.append(thinking_panel)
+
+        # Add team tool calls before member responses
+        if team_tool_calls:
+            formatted_calls = format_tool_calls(team_tool_calls)
+            if formatted_calls:
+                console_width = console.width if console else 80
+                panel_width = console_width + 30
+
+                lines = []
+                # Create a set to track already added calls by their string representation
+                added_calls = set()
+                for call in formatted_calls:
+                    if call not in added_calls:
+                        added_calls.add(call)
+                        # Wrap the call text to fit within the panel
+                        wrapped_call = textwrap.fill(f"• {call}", width=panel_width, subsequent_indent="  ")
+                        lines.append(wrapped_call)
+
+                tool_calls_text = "\n\n".join(lines)
+
+                # Add compression stats at end of tool calls
+                if team.compression_manager is not None and team.compression_manager.stats:
+                    stats = team.compression_manager.stats
+                    saved = stats.get("original_size", 0) - stats.get("compressed_size", 0)
+                    orig = stats.get("original_size", 1)
+                    if stats.get("tool_results_compressed", 0) > 0:
+                        tool_calls_text += f"\n\ncompressed: {stats.get('tool_results_compressed', 0)} | Saved: {saved:,} chars ({saved / orig * 100:.0f}%)"
+                    team.compression_manager.stats.clear()
+
+                team_tool_calls_panel = create_panel(
+                    content=tool_calls_text,
+                    title="Team Tool Calls",
+                    border_style="yellow",
+                )
+                final_panels.append(team_tool_calls_panel)
 
         # Add member tool calls and responses in correct order
         if show_member_responses and run_response is not None and hasattr(run_response, "member_responses"):
@@ -1822,41 +1704,6 @@ async def aprint_response_stream(
                             border_style="magenta",
                         )
                         final_panels.append(citations_panel)
-
-        # Add team tool calls before team response
-        if team_tool_calls:
-            formatted_calls = format_tool_calls(team_tool_calls)
-            if formatted_calls:
-                console_width = console.width if console else 80
-                panel_width = console_width + 30
-
-                lines = []
-                # Create a set to track already added calls by their string representation
-                added_calls = set()
-                for call in formatted_calls:
-                    if call not in added_calls:
-                        added_calls.add(call)
-                        # Wrap the call text to fit within the panel
-                        wrapped_call = textwrap.fill(f"• {call}", width=panel_width, subsequent_indent="  ")
-                        lines.append(wrapped_call)
-
-                tool_calls_text = "\n\n".join(lines)
-
-                # Add compression stats at end of tool calls
-                if team.compression_manager is not None and team.compression_manager.stats:
-                    stats = team.compression_manager.stats
-                    saved = stats.get("original_size", 0) - stats.get("compressed_size", 0)
-                    orig = stats.get("original_size", 1)
-                    if stats.get("tool_results_compressed", 0) > 0:
-                        tool_calls_text += f"\n\ncompressed: {stats.get('tool_results_compressed', 0)} | Saved: {saved:,} chars ({saved / orig * 100:.0f}%)"
-                    team.compression_manager.stats.clear()
-
-                team_tool_calls_panel = create_panel(
-                    content=tool_calls_text,
-                    title="Team Tool Calls",
-                    border_style="yellow",
-                )
-                final_panels.append(team_tool_calls_panel)
 
         # Add team response
         if _response_content:
