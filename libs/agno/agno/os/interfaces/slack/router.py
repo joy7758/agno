@@ -3,7 +3,9 @@ from typing import List, Optional, Union
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from agno.agent import Agent, RemoteAgent
+from slack_sdk.web.async_client import AsyncWebClient
+
+from agno.agent import Agent, RemoteAgent, RunEvent
 from agno.media import File, Image
 from agno.os.interfaces.slack.security import verify_slack_signature
 from agno.team import RemoteTeam, Team
@@ -30,9 +32,11 @@ def attach_routes(
     team: Optional[Union[Team, RemoteTeam]] = None,
     workflow: Optional[Union[Workflow, RemoteWorkflow]] = None,
     reply_to_mentions_only: bool = True,
+    streaming: bool = True,
 ) -> APIRouter:
     entity_type = "agent" if agent else "team" if team else "workflow" if workflow else "unknown"
     slack_tools = SlackTools()
+    async_client = AsyncWebClient(token=slack_tools.token)
 
     @router.post(
         "/events",
@@ -67,6 +71,8 @@ def attach_routes(
             event = data["event"]
             if event.get("bot_id"):
                 pass
+            elif streaming and agent:
+                background_tasks.add_task(_stream_slack_response, data)
             else:
                 background_tasks.add_task(_process_slack_event, event)
 
@@ -154,6 +160,71 @@ def attach_routes(
             _send_slack_message(slack_tools, channel=channel_id, message=response.content or "", thread_ts=ts)
 
             _upload_response_media(slack_tools, response, channel_id, ts)
+
+    async def _stream_slack_response(data: dict):
+        event = data["event"]
+        event_type = event.get("type")
+
+        if event_type not in ("app_mention", "message"):
+            return
+
+        message_text = event.get("text", "")
+        channel_id = event.get("channel", "")
+        user = event.get("user", "")
+        if event.get("thread_ts"):
+            ts=event.get("thread_ts")
+        else:
+            ts=event.get("ts")
+        session_id = ts
+        team_id = data.get("team_id") or event.get("team", "")
+
+        # recipient_user_id must be the bot's own user ID
+        authorizations = data.get("authorizations", [])
+        bot_user_id = authorizations[0]["user_id"] if authorizations else ""
+
+        # app_mention events don't include file attachments — fetch the full message.
+        if event_type == "app_mention" and not event.get("files"):
+            try:
+                result = slack_tools.client.conversations_history(
+                    channel=channel_id, latest=ts, inclusive=True, limit=1
+                )
+                messages = result.get("messages", [])
+                if messages and messages[0].get("files"):
+                    event = {**event, "files": messages[0]["files"]}
+            except Exception as e:
+                log_error(f"Failed to fetch files for app_mention: {e}")
+
+        files, images = _download_event_files(slack_tools, event)
+
+        try:
+            # Use the SDK's ChatStream helper — it handles
+            # start/append/stop, buffering, and ordering internally.
+            streamer = await async_client.chat_stream(
+                channel=channel_id,
+                thread_ts=ts,
+                recipient_team_id=team_id,
+                recipient_user_id=bot_user_id,
+            )
+
+            async for chunk in agent.arun(  # type: ignore[union-attr, misc]
+                message_text,
+                stream=True,
+                user_id=user,
+                session_id=session_id,
+                files=files if files else None,
+                images=images if images else None,
+            ):
+                if chunk.event == RunEvent.run_content:
+                    await streamer.append(markdown_text=str(chunk.content))
+            await streamer.stop()
+        except Exception as e:
+            log_error(f"Error streaming slack response: {e}")
+            _send_slack_message(
+                slack_tools,
+                channel=channel_id,
+                message="Sorry, there was an error processing your message.",
+                thread_ts=ts,
+            )
 
     def _download_event_files(slack_tools: SlackTools, event: dict) -> tuple[List[File], List[Image]]:
         files: List[File] = []
