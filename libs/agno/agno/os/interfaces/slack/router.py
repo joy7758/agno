@@ -230,18 +230,63 @@ def attach_routes(
 
             status_cleared = False
 
-            # Pick the right entity to run
-            entity = agent or team or workflow
-            response_stream = entity.arun(  # type: ignore[union-attr, misc]
-                message_text,
-                stream=True,
-                user_id=user,
-                session_id=session_id,
-                files=files if files else None,
-                images=images if images else None,
-            )
+            if agent:
+                agent.stream_events=True
+                response_stream = agent.arun(  # type: ignore[misc]
+                    message_text,
+                    stream=True,
+                    user_id=user,
+                    session_id=session_id,
+                    files=files if files else None,
+                    images=images if images else None,
+                )
+            elif team:
+                response_stream = team.arun(
+                    message_text,
+                    stream=True,
+                    user_id=user,
+                    session_id=session_id,
+                    files=files if files else None,
+                    images=images if images else None,
+                )  # type: ignore
+            elif workflow:
+                response_stream = workflow.arun(
+                    message_text,
+                    stream=True,
+                    user_id=user,
+                    session_id=session_id,
+                    files=files if files else None,
+                    images=images if images else None,
+                )  # type: ignore
+
+            # Track tool calls for plan block display
+            tool_tasks: dict[str, str] = {}
 
             async for chunk in response_stream:
+                if chunk.event == RunEvent.tool_call_started:
+                    tool_name = chunk.tool.tool_name if chunk.tool else "a tool"
+                    task_id = chunk.tool.tool_call_id if chunk.tool else str(len(tool_tasks))
+                    tool_tasks[task_id] = tool_name
+                    await streamer.append(chunks=[
+                        {"type": "plan_update", "title": "Working on it..."},
+                        {
+                            "type": "task_update",
+                            "id": task_id,
+                            "title": tool_name,
+                            "status": "in_progress",
+                        },
+                    ])
+
+                if chunk.event == RunEvent.tool_call_completed:
+                    task_id = chunk.tool.tool_call_id if chunk.tool else None
+                    if task_id and task_id in tool_tasks:
+                        await streamer.append(chunks=[{
+                            "type": "task_update",
+                            "id": task_id,
+                            "title": tool_tasks[task_id],
+                            "status": "complete",
+                        }])
+
                 if chunk.event == RunEvent.run_content and chunk.content:
                     if not status_cleared:
                         await async_client.assistant_threads_setStatus(
@@ -251,6 +296,7 @@ def attach_routes(
                         )
                         status_cleared = True
                     await streamer.append(markdown_text=str(chunk.content))
+
 
             await streamer.stop()
         except Exception as e:
