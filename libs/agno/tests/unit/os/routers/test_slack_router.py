@@ -745,6 +745,7 @@ async def test_streaming_dispatches_stream_handler():
     ):
         app = _build_app(agent_mock, streaming=True, reply_to_mentions_only=False)
         client = TestClient(app)
+        thread_ts = str(time.time())
         body = {
             "type": "event_callback",
             "team_id": "T123",
@@ -755,29 +756,31 @@ async def test_streaming_dispatches_stream_handler():
                 "text": "hello stream",
                 "user": "U456",
                 "channel": "C123",
-                "ts": str(time.time()),
+                "ts": str(float(thread_ts) + 1),
+                "thread_ts": thread_ts,
             },
         }
         response = _make_signed_request(client, body)
         assert response.status_code == 200
-        await _wait_for_mock_call(mock_async_client.chat_stopStream)
-        mock_async_client.chat_startStream.assert_called_once()
-        mock_async_client.chat_stopStream.assert_called_once()
-        # Status should have been set to "Thinking..." then cleared
+        # With deferred start and no content, stream is never opened
+        # so we just verify the status was set
+        import asyncio
+
+        await asyncio.sleep(0.5)
         status_calls = mock_async_client.assistant_threads_setStatus.call_args_list
-        assert len(status_calls) >= 2
+        assert len(status_calls) >= 1
         assert status_calls[0].kwargs.get("status") == "Thinking..."
-        assert status_calls[-1].kwargs.get("status") == ""
 
 
 @pytest.mark.asyncio
-async def test_empty_authorizations_uses_none():
-    """Missing authorizations should result in None IDs, not empty strings (Bug #5 fix)."""
+async def test_recipient_user_id_is_human_user():
+    """recipient_user_id should be the human user, not the bot (Bug #5 fix)."""
     agent_mock = AsyncMock()
 
     async def _arun_stream(*args, **kwargs):
-        return
-        yield  # noqa: RET504
+        from agno.agent import RunEvent
+
+        yield Mock(event=RunEvent.run_content.value, content="Hello!", tool=None)
 
     agent_mock.arun = _arun_stream
     agent_mock.name = "Test Agent"
@@ -787,7 +790,9 @@ async def test_empty_authorizations_uses_none():
 
     mock_async_client = AsyncMock()
     mock_async_client.assistant_threads_setStatus = AsyncMock()
+    mock_async_client.assistant_threads_setTitle = AsyncMock()
     mock_async_client.chat_startStream = AsyncMock(return_value={"ts": "123.456"})
+    mock_async_client.chat_appendStream = AsyncMock()
     mock_async_client.chat_stopStream = AsyncMock()
 
     with (
@@ -797,23 +802,28 @@ async def test_empty_authorizations_uses_none():
     ):
         app = _build_app(agent_mock, streaming=True, reply_to_mentions_only=False)
         client = TestClient(app)
+        thread_ts = str(time.time())
         body = {
             "type": "event_callback",
+            "team_id": "T123",
+            "authorizations": [{"user_id": "B_BOT_ID"}],
             "event": {
                 "type": "message",
                 "channel_type": "im",
                 "text": "hello",
-                "user": "U456",
+                "user": "U_HUMAN_ID",
                 "channel": "C123",
-                "ts": str(time.time()),
+                "ts": str(float(thread_ts) + 1),
+                "thread_ts": thread_ts,
             },
         }
         response = _make_signed_request(client, body)
         assert response.status_code == 200
         await _wait_for_mock_call(mock_async_client.chat_stopStream)
         call_kwargs = mock_async_client.chat_startStream.call_args.kwargs
-        assert call_kwargs.get("recipient_team_id") is None
-        assert call_kwargs.get("recipient_user_id") is None
+        assert call_kwargs.get("recipient_team_id") == "T123"
+        # Must be the human user ID, NOT the bot ID
+        assert call_kwargs.get("recipient_user_id") == "U_HUMAN_ID"
 
 
 def test_team_event_mapping():
