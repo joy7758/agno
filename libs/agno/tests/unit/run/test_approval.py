@@ -266,6 +266,16 @@ class TestCreateApprovalFromPause:
         assert data["source_name"] == "Team"
         assert data["user_id"] == "u1"
 
+    def test_returns_approval_id_on_success(self):
+        db = MagicMock()
+        rr = FakeRunResponse(tools=[FakeToolExecution(tool_name="delete", approval_type="required")])
+        result = create_approval_from_pause(db=db, run_response=rr, agent_id="a1", agent_name="Agent")
+        assert result is not None
+        assert isinstance(result, str)
+        assert len(result) > 0
+        # The returned ID must match what was passed to db.create_approval
+        data = db.create_approval.call_args[0][0]
+        assert result == data["id"]
 
 # =============================================================================
 # acreate_approval_from_pause (async)
@@ -299,6 +309,17 @@ class TestAsyncCreateApprovalFromPause:
         rr = FakeRunResponse(tools=[FakeToolExecution(approval_type="required")])
         await acreate_approval_from_pause(db=db, run_response=rr)  # should not raise
 
+    @pytest.mark.asyncio
+    async def test_returns_approval_id_on_success(self):
+        db = MagicMock()
+        db.create_approval = AsyncMock()
+        rr = FakeRunResponse(tools=[FakeToolExecution(tool_name="delete", approval_type="required")])
+        result = await acreate_approval_from_pause(db=db, run_response=rr, agent_id="a1", agent_name="Agent")
+        assert result is not None
+        assert isinstance(result, str)
+        assert len(result) > 0
+        data = db.create_approval.call_args[0][0]
+        assert result == data["id"]
 
 # =============================================================================
 # create_audit_approval (sync)
