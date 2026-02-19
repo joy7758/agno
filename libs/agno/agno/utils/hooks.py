@@ -60,6 +60,10 @@ def is_guardrail_hook(hook: Callable[..., Any]) -> bool:
     Guardrails are converted to bound methods (.check/.async_check) by normalize_pre_hooks().
     They must always run synchronously so InputCheckError/OutputCheckError can propagate.
     """
+    # TODO: Replace __self__ introspection with a NormalizedHook(fn, kind) wrapper
+    # so classification happens once at normalization time, not at execution time.
+    # The current approach works because normalize_pre_hooks() always produces bound
+    # methods, but would break if hooks are wrapped with decorators or functools.partial.
     return hasattr(hook, "__self__") and isinstance(hook.__self__, BaseGuardrail)
 
 
