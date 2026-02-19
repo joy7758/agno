@@ -143,18 +143,19 @@ def create_approval_from_pause(
     user_id: Optional[str] = None,
     schedule_id: Optional[str] = None,
     schedule_run_id: Optional[str] = None,
-) -> None:
+) -> Optional[str]:
     """Create an approval record when a run pauses for a tool with approval_type set.
 
-    Silently returns if no approval requirement is found or if DB doesn't support approvals.
+    Returns the approval_id if a record was created, None otherwise.
+    Silently returns None if no approval requirement is found or if DB doesn't support approvals.
     """
     if db is None:
-        return
+        return None
 
     tools = getattr(run_response, "tools", None)
     requirements = getattr(run_response, "requirements", None)
     if not _has_approval_requirement(tools, requirements):
-        return
+        return None
 
     try:
         approval_data = _build_approval_dict(
@@ -170,11 +171,14 @@ def create_approval_from_pause(
             schedule_run_id=schedule_run_id,
         )
         db.create_approval(approval_data)
-        log_debug(f"Created approval {approval_data['id']} for run {approval_data['run_id']}")
+        approval_id: str = approval_data["id"]
+        log_debug(f"Created approval {approval_id} for run {approval_data['run_id']}")
+        return approval_id
     except NotImplementedError:
         pass
     except Exception as e:
         log_warning(f"Error creating approval record (sync): {e}")
+    return None
 
 
 async def acreate_approval_from_pause(
@@ -189,15 +193,18 @@ async def acreate_approval_from_pause(
     user_id: Optional[str] = None,
     schedule_id: Optional[str] = None,
     schedule_run_id: Optional[str] = None,
-) -> None:
-    """Async variant of create_approval_from_pause."""
+) -> Optional[str]:
+    """Async variant of create_approval_from_pause.
+
+    Returns the approval_id if a record was created, None otherwise.
+    """
     if db is None:
-        return
+        return None
 
     tools = getattr(run_response, "tools", None)
     requirements = getattr(run_response, "requirements", None)
     if not _has_approval_requirement(tools, requirements):
-        return
+        return None
 
     try:
         approval_data = _build_approval_dict(
@@ -215,18 +222,21 @@ async def acreate_approval_from_pause(
         # Try async first, fall back to sync
         create_fn = getattr(db, "create_approval", None)
         if create_fn is None:
-            return
+            return None
         from inspect import iscoroutinefunction
 
         if iscoroutinefunction(create_fn):
             await create_fn(approval_data)
         else:
             create_fn(approval_data)
-        log_debug(f"Created approval {approval_data['id']} for run {approval_data['run_id']}")
+        approval_id: str = approval_data["id"]
+        log_debug(f"Created approval {approval_id} for run {approval_data['run_id']}")
+        return approval_id
     except NotImplementedError:
         pass
     except Exception as e:
         log_warning(f"Error creating approval record (async): {e}")
+    return None
 
 
 def create_audit_approval(
