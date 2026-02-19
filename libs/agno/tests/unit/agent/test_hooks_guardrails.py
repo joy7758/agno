@@ -390,6 +390,128 @@ class TestMetadataInjection:
         assert captured_args.get("metadata") == {"env": "test", "version": "2.5"}
 
 
+class MutatingGuardrail(BaseGuardrail):
+    def check(self, run_input: Union[RunInput, TeamRunInput], **kwargs: Any) -> None:
+        run_input.input_content = "[REDACTED]"
+
+    async def async_check(self, run_input: Union[RunInput, TeamRunInput], **kwargs: Any) -> None:
+        run_input.input_content = "[REDACTED]"
+
+
+class CrashingGuardrail(BaseGuardrail):
+    def check(self, **kwargs: Any) -> None:
+        raise RuntimeError("unexpected internal error")
+
+    async def async_check(self, **kwargs: Any) -> None:
+        raise RuntimeError("unexpected internal error")
+
+
+class TestMutatingGuardrailBackground:
+    def test_bg_hooks_receive_post_mutation_data(self):
+        agent = _make_agent(run_hooks_in_background=True)
+        bt = _make_background_tasks()
+        guardrail = MutatingGuardrail()
+        guardrail_hooks = normalize_pre_hooks([guardrail], async_mode=False)
+
+        captured_input = {}
+
+        def spy_hook(run_input, **kwargs):
+            captured_input["content"] = run_input.input_content
+
+        hooks = guardrail_hooks + [spy_hook]
+
+        list(
+            execute_pre_hooks(
+                agent=agent,
+                hooks=hooks,
+                run_response=MagicMock(),
+                run_input=RunInput(input_content="sensitive data"),
+                session=_make_session(),
+                run_context=_make_run_context(),
+                background_tasks=bt,
+            )
+        )
+        assert len(bt.tasks) == 1
+        _, task_kwargs = bt.tasks[0]
+        assert task_kwargs["run_input"].input_content == "[REDACTED]"
+
+    @pytest.mark.asyncio
+    async def test_async_bg_hooks_receive_post_mutation_data(self):
+        agent = _make_agent(run_hooks_in_background=True)
+        bt = _make_background_tasks()
+        guardrail = MutatingGuardrail()
+        guardrail_hooks = normalize_pre_hooks([guardrail], async_mode=True)
+
+        def spy_hook(run_input, **kwargs):
+            pass
+
+        hooks = guardrail_hooks + [spy_hook]
+
+        async for _ in aexecute_pre_hooks(
+            agent=agent,
+            hooks=hooks,
+            run_response=MagicMock(),
+            run_input=RunInput(input_content="sensitive data"),
+            session=_make_session(),
+            run_context=_make_run_context(),
+            background_tasks=bt,
+        ):
+            pass
+        assert len(bt.tasks) == 1
+        _, task_kwargs = bt.tasks[0]
+        assert task_kwargs["run_input"].input_content == "[REDACTED]"
+
+
+class TestCrashingGuardrailBackground:
+    def test_unexpected_exception_logged_not_propagated(self):
+        agent = _make_agent(run_hooks_in_background=True)
+        bt = _make_background_tasks()
+        guardrail = CrashingGuardrail()
+        guardrail_hooks = normalize_pre_hooks([guardrail], async_mode=False)
+
+        def plain_hook(**kwargs):
+            pass
+
+        hooks = guardrail_hooks + [plain_hook]
+
+        list(
+            execute_pre_hooks(
+                agent=agent,
+                hooks=hooks,
+                run_response=MagicMock(),
+                run_input=_make_run_input(),
+                session=_make_session(),
+                run_context=_make_run_context(),
+                background_tasks=bt,
+            )
+        )
+        assert len(bt.tasks) == 1
+
+    @pytest.mark.asyncio
+    async def test_async_unexpected_exception_logged_not_propagated(self):
+        agent = _make_agent(run_hooks_in_background=True)
+        bt = _make_background_tasks()
+        guardrail = CrashingGuardrail()
+        guardrail_hooks = normalize_pre_hooks([guardrail], async_mode=True)
+
+        def plain_hook(**kwargs):
+            pass
+
+        hooks = guardrail_hooks + [plain_hook]
+
+        async for _ in aexecute_pre_hooks(
+            agent=agent,
+            hooks=hooks,
+            run_response=MagicMock(),
+            run_input=_make_run_input(),
+            session=_make_session(),
+            run_context=_make_run_context(),
+            background_tasks=bt,
+        ):
+            pass
+        assert len(bt.tasks) == 1
+
+
 class TestPIIGuardrailTypeSafety:
     def test_mask_pii_masks_and_assigns_string(self):
         from agno.guardrails.pii import PIIDetectionGuardrail

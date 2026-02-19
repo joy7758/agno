@@ -246,18 +246,23 @@ def _execute_pre_hooks(
     # Check if background_tasks is available and ALL hooks should run in background
     # Note: Pre-hooks running in background may not be able to modify run_input
     if team._run_hooks_in_background is True and background_tasks is not None:
-        bg_args = copy_args_for_background(all_args)
-        pending_bg_tasks = []
+        pending_bg_hooks = []
         for hook in hooks:
             if is_guardrail_hook(hook):
                 filtered_args = filter_hook_args(hook, all_args)
-                hook(**filtered_args)
+                try:
+                    hook(**filtered_args)
+                except (InputCheckError, OutputCheckError):
+                    raise
+                except Exception as e:
+                    log_error(f"Background guardrail '{hook.__name__}' execution failed: {str(e)}")
+                    log_exception(e)
             else:
-                filtered_args = filter_hook_args(hook, bg_args)
-                pending_bg_tasks.append((hook, filtered_args))
-        # Only queue background tasks after all guardrails have passed
-        for hook, args in pending_bg_tasks:
-            background_tasks.add_task(hook, **args)
+                pending_bg_hooks.append(hook)
+        bg_args = copy_args_for_background(all_args)
+        for hook in pending_bg_hooks:
+            filtered_args = filter_hook_args(hook, bg_args)
+            background_tasks.add_task(hook, **filtered_args)
         return
 
     for i, hook in enumerate(hooks):
@@ -341,23 +346,28 @@ async def _aexecute_pre_hooks(
     # Check if background_tasks is available and ALL hooks should run in background
     # Note: Pre-hooks running in background may not be able to modify run_input
     if team._run_hooks_in_background is True and background_tasks is not None:
-        bg_args = copy_args_for_background(all_args)
-        pending_bg_tasks = []
+        pending_bg_hooks = []
         for hook in hooks:
             if is_guardrail_hook(hook):
                 filtered_args = filter_hook_args(hook, all_args)
-                from inspect import iscoroutinefunction
+                try:
+                    from inspect import iscoroutinefunction
 
-                if iscoroutinefunction(hook):
-                    await hook(**filtered_args)
-                else:
-                    hook(**filtered_args)
+                    if iscoroutinefunction(hook):
+                        await hook(**filtered_args)
+                    else:
+                        hook(**filtered_args)
+                except (InputCheckError, OutputCheckError):
+                    raise
+                except Exception as e:
+                    log_error(f"Background guardrail '{hook.__name__}' execution failed: {str(e)}")
+                    log_exception(e)
             else:
-                filtered_args = filter_hook_args(hook, bg_args)
-                pending_bg_tasks.append((hook, filtered_args))
-        # Only queue background tasks after all guardrails have passed
-        for hook, args in pending_bg_tasks:
-            background_tasks.add_task(hook, **args)
+                pending_bg_hooks.append(hook)
+        bg_args = copy_args_for_background(all_args)
+        for hook in pending_bg_hooks:
+            filtered_args = filter_hook_args(hook, bg_args)
+            background_tasks.add_task(hook, **filtered_args)
         return
 
     for i, hook in enumerate(hooks):
@@ -444,18 +454,23 @@ def _execute_post_hooks(
 
     # Check if background_tasks is available and ALL hooks should run in background
     if team._run_hooks_in_background is True and background_tasks is not None:
-        bg_args = copy_args_for_background(all_args)
-        pending_bg_tasks = []
+        pending_bg_hooks = []
         for hook in hooks:
             if is_guardrail_hook(hook):
                 filtered_args = filter_hook_args(hook, all_args)
-                hook(**filtered_args)
+                try:
+                    hook(**filtered_args)
+                except (InputCheckError, OutputCheckError):
+                    raise
+                except Exception as e:
+                    log_error(f"Background guardrail '{hook.__name__}' execution failed: {str(e)}")
+                    log_exception(e)
             else:
-                filtered_args = filter_hook_args(hook, bg_args)
-                pending_bg_tasks.append((hook, filtered_args))
-        # Only queue background tasks after all guardrails have passed
-        for hook, args in pending_bg_tasks:
-            background_tasks.add_task(hook, **args)
+                pending_bg_hooks.append(hook)
+        bg_args = copy_args_for_background(all_args)
+        for hook in pending_bg_hooks:
+            filtered_args = filter_hook_args(hook, bg_args)
+            background_tasks.add_task(hook, **filtered_args)
         return
 
     for i, hook in enumerate(hooks):
@@ -536,23 +551,28 @@ async def _aexecute_post_hooks(
 
     # Check if background_tasks is available and ALL hooks should run in background
     if team._run_hooks_in_background is True and background_tasks is not None:
-        bg_args = copy_args_for_background(all_args)
-        pending_bg_tasks = []
+        pending_bg_hooks = []
         for hook in hooks:
             if is_guardrail_hook(hook):
                 filtered_args = filter_hook_args(hook, all_args)
-                from inspect import iscoroutinefunction
+                try:
+                    from inspect import iscoroutinefunction
 
-                if iscoroutinefunction(hook):
-                    await hook(**filtered_args)
-                else:
-                    hook(**filtered_args)
+                    if iscoroutinefunction(hook):
+                        await hook(**filtered_args)
+                    else:
+                        hook(**filtered_args)
+                except (InputCheckError, OutputCheckError):
+                    raise
+                except Exception as e:
+                    log_error(f"Background guardrail '{hook.__name__}' execution failed: {str(e)}")
+                    log_exception(e)
             else:
-                filtered_args = filter_hook_args(hook, bg_args)
-                pending_bg_tasks.append((hook, filtered_args))
-        # Only queue background tasks after all guardrails have passed
-        for hook, args in pending_bg_tasks:
-            background_tasks.add_task(hook, **args)
+                pending_bg_hooks.append(hook)
+        bg_args = copy_args_for_background(all_args)
+        for hook in pending_bg_hooks:
+            filtered_args = filter_hook_args(hook, bg_args)
+            background_tasks.add_task(hook, **filtered_args)
         return
 
     for i, hook in enumerate(hooks):
