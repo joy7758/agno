@@ -229,6 +229,7 @@ def attach_routes(
         async_client = AsyncWebClient(token=slack_tools.token)
         stream_ts: Optional[str] = None
         stream_started = False
+        stream_uses_chunks = False
 
         try:
             # Set status before any file I/O (only in assistant threads)
@@ -254,7 +255,7 @@ def attach_routes(
             pending_tool_chunks: list = []
 
             async def _ensure_stream_started(initial_text: str = "") -> str:
-                nonlocal stream_ts, stream_started
+                nonlocal stream_ts, stream_started, stream_uses_chunks
                 if stream_started:
                     return stream_ts  # type: ignore[return-value]
                 start_kwargs: Dict[str, Any] = {
@@ -265,10 +266,17 @@ def attach_routes(
                 }
                 tool_chunks: list = list(pending_tool_chunks)
                 pending_tool_chunks.clear()
-                if initial_text:
-                    start_kwargs["markdown_text"] = initial_text
-                if tool_chunks:
+                if initial_text and tool_chunks:
+                    # API doesn't allow both markdown_text and chunks —
+                    # wrap text as a chunk so everything goes via chunks.
+                    tool_chunks.insert(0, {"type": "markdown_text", "text": initial_text})
                     start_kwargs["chunks"] = tool_chunks
+                    stream_uses_chunks = True
+                elif initial_text:
+                    start_kwargs["markdown_text"] = initial_text
+                elif tool_chunks:
+                    start_kwargs["chunks"] = tool_chunks
+                    stream_uses_chunks = True
                 if task_display_mode:
                     start_kwargs["task_display_mode"] = task_display_mode
                 start_resp = await async_client.chat_startStream(**start_kwargs)
@@ -395,11 +403,18 @@ def attach_routes(
                         if not stream_started:
                             await _ensure_stream_started(initial_text=text_buffer)
                         else:
-                            await async_client.chat_appendStream(
-                                channel=ctx["channel_id"],
-                                ts=stream_ts,
-                                markdown_text=text_buffer,
-                            )
+                            if stream_uses_chunks:
+                                await async_client.chat_appendStream(
+                                    channel=ctx["channel_id"],
+                                    ts=stream_ts,
+                                    chunks=[{"type": "markdown_text", "text": text_buffer}],
+                                )
+                            else:
+                                await async_client.chat_appendStream(
+                                    channel=ctx["channel_id"],
+                                    ts=stream_ts,
+                                    markdown_text=text_buffer,
+                                )
                         text_buffer = ""
                         first_flush_done = True
 
@@ -410,7 +425,10 @@ def attach_routes(
                     "ts": stream_ts,
                 }
                 if text_buffer:
-                    stop_kwargs["markdown_text"] = text_buffer
+                    if stream_uses_chunks:
+                        stop_kwargs["chunks"] = [{"type": "markdown_text", "text": text_buffer}]
+                    else:
+                        stop_kwargs["markdown_text"] = text_buffer
                 await async_client.chat_stopStream(**stop_kwargs)
             elif text_buffer:
                 ts = await _ensure_stream_started(initial_text=text_buffer)
