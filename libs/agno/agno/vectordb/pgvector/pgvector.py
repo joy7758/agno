@@ -122,7 +122,7 @@ class PgVector(VectorDb):
             from agno.knowledge.embedder.openai import OpenAIEmbedder
 
             embedder = OpenAIEmbedder()
-            log_info("Embedder not provided, using OpenAIEmbedder as default.")
+            log_debug("Embedder not provided, using OpenAIEmbedder as default.")
         self.embedder: Embedder = embedder
         self.dimensions: Optional[int] = self.embedder.dimensions
 
@@ -227,8 +227,11 @@ class PgVector(VectorDb):
                 log_debug("Creating extension: vector")
                 sess.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
                 if self.create_schema and self.schema is not None:
-                    log_debug(f"Creating schema: {self.schema}")
-                    sess.execute(text(f"CREATE SCHEMA IF NOT EXISTS {self.schema};"))
+                    try:
+                        log_debug(f"Creating schema: {self.schema}")
+                        sess.execute(text(f"CREATE SCHEMA IF NOT EXISTS {self.schema};"))
+                    except Exception as e:
+                        log_warning(f"Could not create schema {self.schema}: {e}")
             log_debug(f"Creating table: {self.table_name}")
             self.table.create(self.db_engine)
 
@@ -367,7 +370,10 @@ class PgVector(VectorDb):
                         for doc in batch_docs:
                             try:
                                 cleaned_content = self._clean_content(doc.content)
-                                record_id = doc.id or content_hash
+                                # Include content_hash in ID to ensure uniqueness across different content hashes
+                                # This allows the same URL/content to be inserted with different descriptions
+                                base_id = doc.id or md5(cleaned_content.encode()).hexdigest()
+                                record_id = md5(f"{base_id}_{content_hash}".encode()).hexdigest()
 
                                 meta_data = doc.meta_data or {}
                                 if filters:
@@ -376,7 +382,7 @@ class PgVector(VectorDb):
                                 record = {
                                     "id": record_id,
                                     "name": doc.name,
-                                    "meta_data": doc.meta_data,
+                                    "meta_data": meta_data,
                                     "filters": filters,
                                     "content": cleaned_content,
                                     "embedding": doc.embedding,
@@ -456,7 +462,9 @@ class PgVector(VectorDb):
                         batch_records_dict: Dict[str, Dict[str, Any]] = {}  # Use dict to deduplicate by ID
                         for doc in batch_docs:
                             try:
-                                batch_records_dict[doc.id] = self._get_document_record(doc, filters, content_hash)  # type: ignore
+                                record = self._get_document_record(doc, filters, content_hash)
+                                # Use the generated record ID (which includes content_hash) for deduplication
+                                batch_records_dict[record["id"]] = record
                             except Exception as e:
                                 log_error(f"Error processing document '{doc.name}': {e}")
 
@@ -497,7 +505,10 @@ class PgVector(VectorDb):
     ) -> Dict[str, Any]:
         doc.embed(embedder=self.embedder)
         cleaned_content = self._clean_content(doc.content)
-        record_id = doc.id or content_hash
+        # Include content_hash in ID to ensure uniqueness across different content hashes
+        # This allows the same URL/content to be inserted with different descriptions
+        base_id = doc.id or md5(cleaned_content.encode()).hexdigest()
+        record_id = md5(f"{base_id}_{content_hash}".encode()).hexdigest()
 
         meta_data = doc.meta_data or {}
         if filters:
@@ -506,7 +517,7 @@ class PgVector(VectorDb):
         return {
             "id": record_id,
             "name": doc.name,
-            "meta_data": doc.meta_data,
+            "meta_data": meta_data,
             "filters": filters,
             "content": cleaned_content,
             "embedding": doc.embedding,
@@ -630,7 +641,17 @@ class PgVector(VectorDb):
                         for idx, doc in enumerate(batch_docs):
                             try:
                                 cleaned_content = self._clean_content(doc.content)
-                                record_id = md5(cleaned_content.encode()).hexdigest()
+                                # Include content_hash in ID to ensure uniqueness across different content hashes
+                                # This allows the same URL/content to be inserted with different descriptions
+                                base_id = doc.id or md5(cleaned_content.encode()).hexdigest()
+                                record_id = md5(f"{base_id}_{content_hash}".encode()).hexdigest()
+
+                                if (
+                                    doc.embedding is not None
+                                    and isinstance(doc.embedding, list)
+                                    and len(doc.embedding) == 0
+                                ):
+                                    log_warning(f"Document {idx} '{doc.name}' has empty embedding (length 0)")
 
                                 if (
                                     doc.embedding is not None
@@ -646,7 +667,7 @@ class PgVector(VectorDb):
                                 record = {
                                     "id": record_id,  # use record_id as a reproducible id to avoid duplicates while upsert
                                     "name": doc.name,
-                                    "meta_data": doc.meta_data,
+                                    "meta_data": meta_data,
                                     "filters": filters,
                                     "content": cleaned_content,
                                     "embedding": doc.embedding,
@@ -695,25 +716,23 @@ class PgVector(VectorDb):
         Update the metadata for a document.
 
         Args:
-            id (str): The ID of the document.
+            content_id (str): The ID of the document.
             metadata (Dict[str, Any]): The metadata to update.
         """
         try:
             with self.Session() as sess:
-                # Merge JSONB instead of overwriting: coalesce(existing, '{}') || :new
+                # Merge JSONB for metadata, but replace filters entirely (absolute value)
                 stmt = (
                     update(self.table)
                     .where(self.table.c.content_id == content_id)
                     .values(
                         meta_data=func.coalesce(self.table.c.meta_data, text("'{}'::jsonb")).op("||")(
-                            bindparam("md", metadata, type_=postgresql.JSONB)
+                            bindparam("md", type_=postgresql.JSONB)
                         ),
-                        filters=func.coalesce(self.table.c.filters, text("'{}'::jsonb")).op("||")(
-                            bindparam("ft", metadata, type_=postgresql.JSONB)
-                        ),
+                        filters=bindparam("ft", type_=postgresql.JSONB),
                     )
                 )
-                sess.execute(stmt)
+                sess.execute(stmt, {"md": metadata, "ft": metadata})
                 sess.commit()
         except Exception as e:
             log_error(f"Error updating metadata for document {content_id}: {e}")
@@ -1111,6 +1130,7 @@ class PgVector(VectorDb):
                 search_results = self.reranker.rerank(query=query, documents=search_results)
 
             log_info(f"Found {len(search_results)} documents")
+
             return search_results
         except Exception as e:
             log_error(f"Error during hybrid search: {e}")

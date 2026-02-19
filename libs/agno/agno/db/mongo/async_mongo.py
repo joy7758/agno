@@ -4,6 +4,11 @@ from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from uuid import uuid4
 
+try:
+    from pymongo.errors import DuplicateKeyError
+except ImportError:
+    DuplicateKeyError = Exception  # type: ignore[assignment,misc]
+
 if TYPE_CHECKING:
     from agno.tracing.schemas import Span, Trace
 
@@ -149,6 +154,7 @@ class AsyncMongoDb(AsyncBaseDb):
         culture_collection: Optional[str] = None,
         traces_collection: Optional[str] = None,
         spans_collection: Optional[str] = None,
+        learnings_collection: Optional[str] = None,
         id: Optional[str] = None,
     ):
         """
@@ -172,6 +178,7 @@ class AsyncMongoDb(AsyncBaseDb):
             culture_collection (Optional[str]): Name of the collection to store cultural knowledge.
             traces_collection (Optional[str]): Name of the collection to store traces.
             spans_collection (Optional[str]): Name of the collection to store spans.
+            learnings_collection (Optional[str]): Name of the collection to store learnings.
             id (Optional[str]): ID of the database.
 
         Raises:
@@ -194,6 +201,7 @@ class AsyncMongoDb(AsyncBaseDb):
             culture_table=culture_collection,
             traces_table=traces_collection,
             spans_table=spans_collection,
+            learnings_table=learnings_collection,
         )
 
         # Detect client type if provided
@@ -248,6 +256,17 @@ class AsyncMongoDb(AsyncBaseDb):
         for collection_type, collection_name in collections_to_create:
             if collection_name and not await self.table_exists(collection_name):
                 await self._get_collection(collection_type, create_collection_if_not_found=True)
+
+    async def close(self) -> None:
+        """Close the MongoDB client connection.
+
+        Should be called during application shutdown to properly release
+        all database connections.
+        """
+        if self._client is not None:
+            self._client.close()
+            self._client = None
+            self._database = None
 
     def _ensure_client(self) -> AsyncMongoClientType:
         """
@@ -441,6 +460,17 @@ class AsyncMongoDb(AsyncBaseDb):
                 )
             return self.spans_collection
 
+        if table_type == "learnings":
+            if reset_cache or not hasattr(self, "learnings_collection"):
+                if self.learnings_table_name is None:
+                    raise ValueError("Learnings collection was not provided on initialization")
+                self.learnings_collection = await self._get_or_create_collection(
+                    collection_name=self.learnings_table_name,
+                    collection_type="learnings",
+                    create_collection_if_not_found=create_collection_if_not_found,
+                )
+            return self.learnings_collection
+
         raise ValueError(f"Unknown table type: {table_type}")
 
     async def _get_or_create_collection(
@@ -485,11 +515,12 @@ class AsyncMongoDb(AsyncBaseDb):
 
     # -- Session methods --
 
-    async def delete_session(self, session_id: str) -> bool:
+    async def delete_session(self, session_id: str, user_id: Optional[str] = None) -> bool:
         """Delete a session from the database.
 
         Args:
             session_id (str): The ID of the session to delete.
+            user_id (Optional[str]): User ID to filter by. Defaults to None.
 
         Returns:
             bool: True if the session was deleted, False otherwise.
@@ -502,7 +533,10 @@ class AsyncMongoDb(AsyncBaseDb):
             if collection is None:
                 return False
 
-            result = await collection.delete_one({"session_id": session_id})
+            query: Dict[str, Any] = {"session_id": session_id}
+            if user_id is not None:
+                query["user_id"] = user_id
+            result = await collection.delete_one(query)
             if result.deleted_count == 0:
                 log_debug(f"No session found to delete with session_id: {session_id}")
                 return False
@@ -514,18 +548,22 @@ class AsyncMongoDb(AsyncBaseDb):
             log_error(f"Error deleting session: {e}")
             raise e
 
-    async def delete_sessions(self, session_ids: List[str]) -> None:
+    async def delete_sessions(self, session_ids: List[str], user_id: Optional[str] = None) -> None:
         """Delete multiple sessions from the database.
 
         Args:
             session_ids (List[str]): The IDs of the sessions to delete.
+            user_id (Optional[str]): User ID to filter by. Defaults to None.
         """
         try:
             collection = await self._get_collection(table_type="sessions")
             if collection is None:
                 return
 
-            result = await collection.delete_many({"session_id": {"$in": session_ids}})
+            query: Dict[str, Any] = {"session_id": {"$in": session_ids}}
+            if user_id is not None:
+                query["user_id"] = user_id
+            result = await collection.delete_many(query)
             log_debug(f"Successfully deleted {result.deleted_count} sessions")
 
         except Exception as e:
@@ -699,7 +737,12 @@ class AsyncMongoDb(AsyncBaseDb):
             raise e
 
     async def rename_session(
-        self, session_id: str, session_type: SessionType, session_name: str, deserialize: Optional[bool] = True
+        self,
+        session_id: str,
+        session_type: SessionType,
+        session_name: str,
+        user_id: Optional[str] = None,
+        deserialize: Optional[bool] = True,
     ) -> Optional[Union[Session, Dict[str, Any]]]:
         """Rename a session in the database.
 
@@ -707,6 +750,7 @@ class AsyncMongoDb(AsyncBaseDb):
             session_id (str): The ID of the session to rename.
             session_type (SessionType): The type of session to rename.
             session_name (str): The new name of the session.
+            user_id (Optional[str]): User ID to filter by. Defaults to None.
             deserialize (Optional[bool]): Whether to serialize the session. Defaults to True.
 
         Returns:
@@ -722,9 +766,12 @@ class AsyncMongoDb(AsyncBaseDb):
             if collection is None:
                 return None
 
+            query: Dict[str, Any] = {"session_id": session_id}
+            if user_id is not None:
+                query["user_id"] = user_id
             try:
                 result = await collection.find_one_and_update(
-                    {"session_id": session_id},
+                    query,
                     {"$set": {"session_data.session_name": session_name, "updated_at": int(time.time())}},
                     return_document=ReturnDocument.AFTER,
                     upsert=False,
@@ -732,7 +779,7 @@ class AsyncMongoDb(AsyncBaseDb):
             except OperationFailure:
                 # If the update fails because session_data doesn't contain a session_name yet, we initialize session_data
                 result = await collection.find_one_and_update(
-                    {"session_id": session_id},
+                    query,
                     {"$set": {"session_data": {"session_name": session_name}, "updated_at": int(time.time())}},
                     return_document=ReturnDocument.AFTER,
                     upsert=False,
@@ -778,6 +825,19 @@ class AsyncMongoDb(AsyncBaseDb):
 
             session_dict = session.to_dict()
 
+            existing = await collection.find_one({"session_id": session_dict.get("session_id")}, {"user_id": 1})
+            if existing:
+                existing_uid = existing.get("user_id")
+                if existing_uid is not None and existing_uid != session_dict.get("user_id"):
+                    return None
+
+            incoming_uid = session_dict.get("user_id")
+            upsert_filter: Dict[str, Any] = {"session_id": session_dict.get("session_id")}
+            if incoming_uid is not None:
+                upsert_filter["$or"] = [{"user_id": incoming_uid}, {"user_id": None}, {"user_id": {"$exists": False}}]
+            else:
+                upsert_filter["$or"] = [{"user_id": None}, {"user_id": {"$exists": False}}]
+
             if isinstance(session, AgentSession):
                 record = {
                     "session_id": session_dict.get("session_id"),
@@ -793,12 +853,15 @@ class AsyncMongoDb(AsyncBaseDb):
                     "updated_at": int(time.time()),
                 }
 
-                result = await collection.find_one_and_replace(
-                    filter={"session_id": session_dict.get("session_id")},
-                    replacement=record,
-                    upsert=True,
-                    return_document=ReturnDocument.AFTER,
-                )
+                try:
+                    result = await collection.find_one_and_replace(
+                        filter=upsert_filter,
+                        replacement=record,
+                        upsert=True,
+                        return_document=ReturnDocument.AFTER,
+                    )
+                except DuplicateKeyError:
+                    return None
                 if not result:
                     return None
 
@@ -824,12 +887,15 @@ class AsyncMongoDb(AsyncBaseDb):
                     "updated_at": int(time.time()),
                 }
 
-                result = await collection.find_one_and_replace(
-                    filter={"session_id": session_dict.get("session_id")},
-                    replacement=record,
-                    upsert=True,
-                    return_document=ReturnDocument.AFTER,
-                )
+                try:
+                    result = await collection.find_one_and_replace(
+                        filter=upsert_filter,
+                        replacement=record,
+                        upsert=True,
+                        return_document=ReturnDocument.AFTER,
+                    )
+                except DuplicateKeyError:
+                    return None
                 if not result:
                     return None
 
@@ -856,12 +922,15 @@ class AsyncMongoDb(AsyncBaseDb):
                     "updated_at": int(time.time()),
                 }
 
-                result = await collection.find_one_and_replace(
-                    filter={"session_id": session_dict.get("session_id")},
-                    replacement=record,
-                    upsert=True,
-                    return_document=ReturnDocument.AFTER,
-                )
+                try:
+                    result = await collection.find_one_and_replace(
+                        filter=upsert_filter,
+                        replacement=record,
+                        upsert=True,
+                        return_document=ReturnDocument.AFTER,
+                    )
+                except DuplicateKeyError:
+                    return None
                 if not result:
                     return None
 
@@ -1874,6 +1943,7 @@ class AsyncMongoDb(AsyncBaseDb):
         page: Optional[int] = None,
         sort_by: Optional[str] = None,
         sort_order: Optional[str] = None,
+        linked_to: Optional[str] = None,
     ) -> Tuple[List[KnowledgeRow], int]:
         """Get all knowledge contents from the database.
 
@@ -1882,6 +1952,7 @@ class AsyncMongoDb(AsyncBaseDb):
             page (Optional[int]): The page number.
             sort_by (Optional[str]): The column to sort by.
             sort_order (Optional[str]): The order to sort by.
+            linked_to (Optional[str]): Filter by linked_to value (knowledge instance name).
 
         Returns:
             Tuple[List[KnowledgeRow], int]: The knowledge contents and total count.
@@ -1895,6 +1966,10 @@ class AsyncMongoDb(AsyncBaseDb):
                 return [], 0
 
             query: Dict[str, Any] = {}
+
+            # Apply linked_to filter if provided
+            if linked_to is not None:
+                query["linked_to"] = linked_to
 
             # Get total count
             total_count = await collection.count_documents(query)
@@ -2191,8 +2266,45 @@ class AsyncMongoDb(AsyncBaseDb):
             raise e
 
     # --- Traces ---
-    async def create_trace(self, trace: "Trace") -> None:
-        """Create a single trace record in the database.
+    def _get_component_level(
+        self, workflow_id: Optional[str], team_id: Optional[str], agent_id: Optional[str], name: str
+    ) -> int:
+        """Get the component level for a trace based on its context.
+
+        Component levels (higher = more important):
+            - 3: Workflow root (.run or .arun with workflow_id)
+            - 2: Team root (.run or .arun with team_id)
+            - 1: Agent root (.run or .arun with agent_id)
+            - 0: Child span (not a root)
+
+        Args:
+            workflow_id: The workflow ID of the trace.
+            team_id: The team ID of the trace.
+            agent_id: The agent ID of the trace.
+            name: The name of the trace.
+
+        Returns:
+            int: The component level (0-3).
+        """
+        # Check if name indicates a root span
+        is_root_name = ".run" in name or ".arun" in name
+
+        if not is_root_name:
+            return 0  # Child span (not a root)
+        elif workflow_id:
+            return 3  # Workflow root
+        elif team_id:
+            return 2  # Team root
+        elif agent_id:
+            return 1  # Agent root
+        else:
+            return 0  # Unknown
+
+    async def upsert_trace(self, trace: "Trace") -> None:
+        """Create or update a single trace record in the database.
+
+        Uses MongoDB's update_one with upsert=True and aggregation pipeline
+        to handle concurrent inserts atomically and avoid race conditions.
 
         Args:
             trace: The Trace object to store (one per trace_id).
@@ -2202,75 +2314,140 @@ class AsyncMongoDb(AsyncBaseDb):
             if collection is None:
                 return
 
-            # Check if trace already exists
-            existing = await collection.find_one({"trace_id": trace.trace_id})
+            trace_dict = trace.to_dict()
+            trace_dict.pop("total_spans", None)
+            trace_dict.pop("error_count", None)
 
-            if existing:
-                # workflow (level 3) > team (level 2) > agent (level 1) > child/unknown (level 0)
-                def get_component_level(
-                    workflow_id: Optional[str], team_id: Optional[str], agent_id: Optional[str], name: str
-                ) -> int:
-                    # Check if name indicates a root span
-                    is_root_name = ".run" in name or ".arun" in name
+            # Calculate the component level for the new trace
+            new_level = self._get_component_level(trace.workflow_id, trace.team_id, trace.agent_id, trace.name)
 
-                    if not is_root_name:
-                        return 0  # Child span (not a root)
-                    elif workflow_id:
-                        return 3  # Workflow root
-                    elif team_id:
-                        return 2  # Team root
-                    elif agent_id:
-                        return 1  # Agent root
-                    else:
-                        return 0  # Unknown
+            # Use MongoDB aggregation pipeline update for atomic upsert
+            # This allows conditional logic within a single atomic operation
+            pipeline: List[Dict[str, Any]] = [
+                {
+                    "$set": {
+                        # Always update these fields
+                        "status": trace.status,
+                        "created_at": {"$ifNull": ["$created_at", trace_dict.get("created_at")]},
+                        # Use $min for start_time (keep earliest)
+                        "start_time": {
+                            "$cond": {
+                                "if": {"$eq": [{"$type": "$start_time"}, "missing"]},
+                                "then": trace_dict.get("start_time"),
+                                "else": {"$min": ["$start_time", trace_dict.get("start_time")]},
+                            }
+                        },
+                        # Use $max for end_time (keep latest)
+                        "end_time": {
+                            "$cond": {
+                                "if": {"$eq": [{"$type": "$end_time"}, "missing"]},
+                                "then": trace_dict.get("end_time"),
+                                "else": {"$max": ["$end_time", trace_dict.get("end_time")]},
+                            }
+                        },
+                        # Preserve existing non-null context values using $ifNull
+                        "run_id": {"$ifNull": [trace.run_id, "$run_id"]},
+                        "session_id": {"$ifNull": [trace.session_id, "$session_id"]},
+                        "user_id": {"$ifNull": [trace.user_id, "$user_id"]},
+                        "agent_id": {"$ifNull": [trace.agent_id, "$agent_id"]},
+                        "team_id": {"$ifNull": [trace.team_id, "$team_id"]},
+                        "workflow_id": {"$ifNull": [trace.workflow_id, "$workflow_id"]},
+                    }
+                },
+                {
+                    "$set": {
+                        # Calculate duration_ms from the (potentially updated) start_time and end_time
+                        # MongoDB stores dates as strings in ISO format, so we need to parse them
+                        "duration_ms": {
+                            "$cond": {
+                                "if": {
+                                    "$and": [
+                                        {"$ne": [{"$type": "$start_time"}, "missing"]},
+                                        {"$ne": [{"$type": "$end_time"}, "missing"]},
+                                    ]
+                                },
+                                "then": {
+                                    "$subtract": [
+                                        {"$toLong": {"$toDate": "$end_time"}},
+                                        {"$toLong": {"$toDate": "$start_time"}},
+                                    ]
+                                },
+                                "else": trace_dict.get("duration_ms", 0),
+                            }
+                        },
+                        # Update name based on component level priority
+                        # Only update if new trace is from a higher-level component
+                        "name": {
+                            "$cond": {
+                                "if": {"$eq": [{"$type": "$name"}, "missing"]},
+                                "then": trace.name,
+                                "else": {
+                                    "$cond": {
+                                        "if": {
+                                            "$gt": [
+                                                new_level,
+                                                {
+                                                    "$switch": {
+                                                        "branches": [
+                                                            # Check if existing name is a root span
+                                                            {
+                                                                "case": {
+                                                                    "$not": {
+                                                                        "$or": [
+                                                                            {
+                                                                                "$regexMatch": {
+                                                                                    "input": {"$ifNull": ["$name", ""]},
+                                                                                    "regex": "\\.run",
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "$regexMatch": {
+                                                                                    "input": {"$ifNull": ["$name", ""]},
+                                                                                    "regex": "\\.arun",
+                                                                                }
+                                                                            },
+                                                                        ]
+                                                                    }
+                                                                },
+                                                                "then": 0,
+                                                            },
+                                                            # Workflow root (level 3)
+                                                            {
+                                                                "case": {"$ne": ["$workflow_id", None]},
+                                                                "then": 3,
+                                                            },
+                                                            # Team root (level 2)
+                                                            {
+                                                                "case": {"$ne": ["$team_id", None]},
+                                                                "then": 2,
+                                                            },
+                                                            # Agent root (level 1)
+                                                            {
+                                                                "case": {"$ne": ["$agent_id", None]},
+                                                                "then": 1,
+                                                            },
+                                                        ],
+                                                        "default": 0,
+                                                    }
+                                                },
+                                            ]
+                                        },
+                                        "then": trace.name,
+                                        "else": "$name",
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+            ]
 
-                existing_level = get_component_level(
-                    existing.get("workflow_id"),
-                    existing.get("team_id"),
-                    existing.get("agent_id"),
-                    existing.get("name", ""),
-                )
-                new_level = get_component_level(trace.workflow_id, trace.team_id, trace.agent_id, trace.name)
-
-                # Only update name if new trace is from a higher or equal level
-                should_update_name = new_level > existing_level
-
-                # Parse existing start_time to calculate correct duration
-                existing_start_time_str = existing.get("start_time")
-                if isinstance(existing_start_time_str, str):
-                    existing_start_time = datetime.fromisoformat(existing_start_time_str.replace("Z", "+00:00"))
-                else:
-                    existing_start_time = trace.start_time
-
-                recalculated_duration_ms = int((trace.end_time - existing_start_time).total_seconds() * 1000)
-
-                update_values: Dict[str, Any] = {
-                    "end_time": trace.end_time.isoformat(),
-                    "duration_ms": recalculated_duration_ms,
-                    "status": trace.status,
-                    "name": trace.name if should_update_name else existing.get("name"),
-                }
-
-                # Update context fields ONLY if new value is not None (preserve non-null values)
-                if trace.run_id is not None:
-                    update_values["run_id"] = trace.run_id
-                if trace.session_id is not None:
-                    update_values["session_id"] = trace.session_id
-                if trace.user_id is not None:
-                    update_values["user_id"] = trace.user_id
-                if trace.agent_id is not None:
-                    update_values["agent_id"] = trace.agent_id
-                if trace.team_id is not None:
-                    update_values["team_id"] = trace.team_id
-                if trace.workflow_id is not None:
-                    update_values["workflow_id"] = trace.workflow_id
-
-                await collection.update_one({"trace_id": trace.trace_id}, {"$set": update_values})
-            else:
-                trace_dict = trace.to_dict()
-                trace_dict.pop("total_spans", None)
-                trace_dict.pop("error_count", None)
-                await collection.insert_one(trace_dict)
+            # Perform atomic upsert using aggregation pipeline
+            await collection.update_one(
+                {"trace_id": trace.trace_id},
+                pipeline,
+                upsert=True,
+            )
 
         except Exception as e:
             log_error(f"Error creating trace: {e}")
@@ -2386,7 +2563,7 @@ class AsyncMongoDb(AsyncBaseDb):
                 query["run_id"] = run_id
             if session_id:
                 query["session_id"] = session_id
-            if user_id:
+            if user_id is not None:
                 query["user_id"] = user_id
             if agent_id:
                 query["agent_id"] = agent_id
@@ -2472,7 +2649,7 @@ class AsyncMongoDb(AsyncBaseDb):
 
             # Build match stage
             match_stage: Dict[str, Any] = {"session_id": {"$ne": None}}
-            if user_id:
+            if user_id is not None:
                 match_stage["user_id"] = user_id
             if agent_id:
                 match_stage["agent_id"] = agent_id
@@ -2655,4 +2832,219 @@ class AsyncMongoDb(AsyncBaseDb):
 
         except Exception as e:
             log_error(f"Error getting spans: {e}")
+            return []
+
+    # -- Learning methods --
+    async def get_learning(
+        self,
+        learning_type: str,
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        team_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        namespace: Optional[str] = None,
+        entity_id: Optional[str] = None,
+        entity_type: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Retrieve a learning record.
+
+        Args:
+            learning_type: Type of learning ('user_profile', 'session_context', etc.)
+            user_id: Filter by user ID.
+            agent_id: Filter by agent ID.
+            team_id: Filter by team ID.
+            session_id: Filter by session ID.
+            namespace: Filter by namespace ('user', 'global', or custom).
+            entity_id: Filter by entity ID (for entity-specific learnings).
+            entity_type: Filter by entity type ('person', 'company', etc.).
+
+        Returns:
+            Dict with 'content' key containing the learning data, or None.
+        """
+        try:
+            collection = await self._get_collection(table_type="learnings", create_collection_if_not_found=False)
+            if collection is None:
+                return None
+
+            # Build query
+            query: Dict[str, Any] = {"learning_type": learning_type}
+            if user_id is not None:
+                query["user_id"] = user_id
+            if agent_id is not None:
+                query["agent_id"] = agent_id
+            if team_id is not None:
+                query["team_id"] = team_id
+            if session_id is not None:
+                query["session_id"] = session_id
+            if namespace is not None:
+                query["namespace"] = namespace
+            if entity_id is not None:
+                query["entity_id"] = entity_id
+            if entity_type is not None:
+                query["entity_type"] = entity_type
+
+            result = await collection.find_one(query)
+            if result is None:
+                return None
+
+            # Remove MongoDB's _id field
+            result.pop("_id", None)
+            return {"content": result.get("content")}
+
+        except Exception as e:
+            log_debug(f"Error retrieving learning: {e}")
+            return None
+
+    async def upsert_learning(
+        self,
+        id: str,
+        learning_type: str,
+        content: Dict[str, Any],
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        team_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        namespace: Optional[str] = None,
+        entity_id: Optional[str] = None,
+        entity_type: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Insert or update a learning record.
+
+        Args:
+            id: Unique identifier for the learning.
+            learning_type: Type of learning ('user_profile', 'session_context', etc.)
+            content: The learning content as a dict.
+            user_id: Associated user ID.
+            agent_id: Associated agent ID.
+            team_id: Associated team ID.
+            session_id: Associated session ID.
+            namespace: Namespace for scoping ('user', 'global', or custom).
+            entity_id: Associated entity ID (for entity-specific learnings).
+            entity_type: Entity type ('person', 'company', etc.).
+            metadata: Optional metadata.
+        """
+        try:
+            collection = await self._get_collection(table_type="learnings", create_collection_if_not_found=True)
+            if collection is None:
+                return
+
+            current_time = int(time.time())
+
+            document = {
+                "learning_id": id,
+                "learning_type": learning_type,
+                "namespace": namespace,
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "team_id": team_id,
+                "session_id": session_id,
+                "entity_id": entity_id,
+                "entity_type": entity_type,
+                "content": content,
+                "metadata": metadata,
+                "updated_at": current_time,
+            }
+
+            # Use upsert to insert or update
+            await collection.update_one(
+                {"learning_id": id},
+                {"$set": document, "$setOnInsert": {"created_at": current_time}},
+                upsert=True,
+            )
+
+            log_debug(f"Upserted learning: {id}")
+
+        except Exception as e:
+            log_debug(f"Error upserting learning: {e}")
+
+    async def delete_learning(self, id: str) -> bool:
+        """Delete a learning record.
+
+        Args:
+            id: The learning ID to delete.
+
+        Returns:
+            True if deleted, False otherwise.
+        """
+        try:
+            collection = await self._get_collection(table_type="learnings", create_collection_if_not_found=False)
+            if collection is None:
+                return False
+
+            result = await collection.delete_one({"learning_id": id})
+            return result.deleted_count > 0
+
+        except Exception as e:
+            log_debug(f"Error deleting learning: {e}")
+            return False
+
+    async def get_learnings(
+        self,
+        learning_type: Optional[str] = None,
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        team_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        namespace: Optional[str] = None,
+        entity_id: Optional[str] = None,
+        entity_type: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get multiple learning records.
+
+        Args:
+            learning_type: Filter by learning type.
+            user_id: Filter by user ID.
+            agent_id: Filter by agent ID.
+            team_id: Filter by team ID.
+            session_id: Filter by session ID.
+            namespace: Filter by namespace ('user', 'global', or custom).
+            entity_id: Filter by entity ID (for entity-specific learnings).
+            entity_type: Filter by entity type ('person', 'company', etc.).
+            limit: Maximum number of records to return.
+
+        Returns:
+            List of learning records.
+        """
+        try:
+            collection = await self._get_collection(table_type="learnings", create_collection_if_not_found=False)
+            if collection is None:
+                return []
+
+            # Build query
+            query: Dict[str, Any] = {}
+            if learning_type is not None:
+                query["learning_type"] = learning_type
+            if user_id is not None:
+                query["user_id"] = user_id
+            if agent_id is not None:
+                query["agent_id"] = agent_id
+            if team_id is not None:
+                query["team_id"] = team_id
+            if session_id is not None:
+                query["session_id"] = session_id
+            if namespace is not None:
+                query["namespace"] = namespace
+            if entity_id is not None:
+                query["entity_id"] = entity_id
+            if entity_type is not None:
+                query["entity_type"] = entity_type
+
+            cursor = collection.find(query)
+            if limit is not None:
+                cursor = cursor.limit(limit)
+
+            results = await cursor.to_list(length=None)
+
+            learnings = []
+            for row in results:
+                # Remove MongoDB's _id field
+                row.pop("_id", None)
+                learnings.append(row)
+
+            return learnings
+
+        except Exception as e:
+            log_debug(f"Error getting learnings: {e}")
             return []

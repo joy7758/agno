@@ -137,7 +137,7 @@ class DummyAsyncMemoryDb(AsyncBaseDb):
         raise NotImplementedError
 
     # --- Traces ---
-    async def create_trace(self, trace: "Trace") -> None:
+    async def upsert_trace(self, trace: "Trace") -> None:
         raise NotImplementedError
 
     async def get_trace(self, trace_id: str):
@@ -183,6 +183,19 @@ class DummyAsyncMemoryDb(AsyncBaseDb):
         raise NotImplementedError
 
     async def upsert_schema_version(self, *args, **kwargs):
+        raise NotImplementedError
+
+    # --- Learnings ---
+    async def get_learning(self, *args, **kwargs):
+        raise NotImplementedError
+
+    async def upsert_learning(self, *args, **kwargs):
+        raise NotImplementedError
+
+    async def delete_learning(self, *args, **kwargs):
+        raise NotImplementedError
+
+    async def get_learnings(self, *args, **kwargs):
         raise NotImplementedError
 
 

@@ -5,6 +5,15 @@ from typing import Generic, List, Optional, TypeVar
 from pydantic import BaseModel, field_validator
 
 
+class AuthorizationConfig(BaseModel):
+    """Configuration for the JWT middleware"""
+
+    verification_keys: Optional[List[str]] = None
+    jwks_file: Optional[str] = None
+    algorithm: Optional[str] = None
+    verify_audience: Optional[bool] = None
+
+
 class EvalsDomainConfig(BaseModel):
     """Configuration for the Evals domain of the AgentOS"""
 
@@ -22,6 +31,16 @@ class KnowledgeDomainConfig(BaseModel):
     """Configuration for the Knowledge domain of the AgentOS"""
 
     display_name: Optional[str] = None
+
+
+class KnowledgeInstanceConfig(BaseModel):
+    """Configuration for a single knowledge instance"""
+
+    id: str
+    name: str
+    description: Optional[str] = None
+    db_id: str
+    table: str
 
 
 class MetricsDomainConfig(BaseModel):
@@ -71,10 +90,19 @@ class MemoryConfig(MemoryDomainConfig):
     dbs: Optional[List[DatabaseConfig[MemoryDomainConfig]]] = None
 
 
+class KnowledgeDatabaseConfig(BaseModel):
+    """Configuration for a knowledge database with its tables"""
+
+    db_id: str
+    domain_config: Optional[KnowledgeDomainConfig] = None
+    tables: List[str] = []
+
+
 class KnowledgeConfig(KnowledgeDomainConfig):
     """Configuration for the Knowledge domain of the AgentOS"""
 
-    dbs: Optional[List[DatabaseConfig[KnowledgeDomainConfig]]] = None
+    dbs: Optional[List[KnowledgeDatabaseConfig]] = None
+    knowledge_instances: Optional[List[KnowledgeInstanceConfig]] = None
 
 
 class MetricsConfig(MetricsDomainConfig):

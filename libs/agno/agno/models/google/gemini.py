@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import mimetypes
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -19,8 +20,10 @@ from agno.models.message import Citations, Message, UrlCitation
 from agno.models.metrics import Metrics
 from agno.models.response import ModelResponse
 from agno.run.agent import RunOutput
+from agno.tools.function import Function
 from agno.utils.gemini import format_function_definitions, format_image_for_message, prepare_response_schema
 from agno.utils.log import log_debug, log_error, log_info, log_warning
+from agno.utils.tokens import count_schema_tokens, count_text_tokens, count_tool_tokens
 
 try:
     from google import genai
@@ -48,6 +51,7 @@ try:
     from google.genai.types import (
         File as GeminiFile,
     )
+    from google.oauth2.service_account import Credentials
 except ImportError:
     raise ImportError(
         "`google-genai` not installed or not at the latest version. Please install it using `pip install -U google-genai`"
@@ -64,6 +68,7 @@ class Gemini(Model):
     - Set `vertexai` to `True` to use the Vertex AI API.
     - Set your `project_id` (or set `GOOGLE_CLOUD_PROJECT` environment variable) and `location` (optional).
     - Set `http_options` (optional) to configure the HTTP options.
+    - Set `credentials` (optional) to use the Google Cloud credentials.
 
     Based on https://googleapis.github.io/python-genai/
     """
@@ -108,6 +113,7 @@ class Gemini(Model):
     request_params: Optional[Dict[str, Any]] = None
 
     # Client parameters
+    credentials: Optional[Credentials] = None
     api_key: Optional[str] = None
     vertexai: bool = False
     project_id: Optional[str] = None
@@ -156,6 +162,8 @@ class Gemini(Model):
                 log_error("GOOGLE_CLOUD_LOCATION not set. Please set the GOOGLE_CLOUD_LOCATION environment variable.")
             client_params["project"] = project_id
             client_params["location"] = location
+            if self.credentials:
+                client_params["credentials"] = self.credentials
 
         client_params = {k: v for k, v in client_params.items() if v is not None}
 
@@ -164,6 +172,45 @@ class Gemini(Model):
 
         self.client = genai.Client(**client_params)
         return self.client
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert the model to a dictionary.
+
+        Returns:
+            Dict[str, Any]: The dictionary representation of the model.
+        """
+        model_dict = super().to_dict()
+        model_dict.update(
+            {
+                "search": self.search,
+                "grounding": self.grounding,
+                "grounding_dynamic_threshold": self.grounding_dynamic_threshold,
+                "url_context": self.url_context,
+                "vertexai_search": self.vertexai_search,
+                "vertexai_search_datastore": self.vertexai_search_datastore,
+                "file_search_store_names": self.file_search_store_names,
+                "file_search_metadata_filter": self.file_search_metadata_filter,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "top_k": self.top_k,
+                "max_output_tokens": self.max_output_tokens,
+                "stop_sequences": self.stop_sequences,
+                "logprobs": self.logprobs,
+                "presence_penalty": self.presence_penalty,
+                "frequency_penalty": self.frequency_penalty,
+                "seed": self.seed,
+                "response_modalities": self.response_modalities,
+                "thinking_budget": self.thinking_budget,
+                "include_thoughts": self.include_thoughts,
+                "thinking_level": self.thinking_level,
+                "vertexai": self.vertexai,
+                "project_id": self.project_id,
+                "location": self.location,
+            }
+        )
+        cleaned_dict = {k: v for k, v in model_dict.items() if v is not None}
+        return cleaned_dict
 
     def _append_file_search_tool(self, builtin_tools: List[Tool]) -> None:
         """Append Gemini File Search tool to builtin_tools if file search is enabled.
@@ -310,6 +357,113 @@ class Gemini(Model):
             log_debug(f"Calling {self.provider} with request parameters: {request_params}", log_level=2)
         return request_params
 
+    def count_tokens(
+        self,
+        messages: List[Message],
+        tools: Optional[List[Union[Function, Dict[str, Any]]]] = None,
+        output_schema: Optional[Union[Dict, Type[BaseModel]]] = None,
+    ) -> int:
+        contents, system_instruction = self._format_messages(messages, compress_tool_results=True)
+        schema_tokens = count_schema_tokens(output_schema, self.id)
+
+        if self.vertexai:
+            # VertexAI supports full token counting with system_instruction and tools
+            config: Dict[str, Any] = {}
+            if system_instruction:
+                config["system_instruction"] = system_instruction
+            if tools:
+                formatted_tools = self._format_tools(tools)
+                gemini_tools = format_function_definitions(formatted_tools)
+                if gemini_tools:
+                    config["tools"] = [gemini_tools]
+
+            response = self.get_client().models.count_tokens(
+                model=self.id,
+                contents=contents,
+                config=config if config else None,  # type: ignore
+            )
+            return (response.total_tokens or 0) + schema_tokens
+        else:
+            # Google AI Studio: Use API for content tokens + local estimation for system/tools
+            # The API doesn't support system_instruction or tools in config, so we use a hybrid approach:
+            # 1. Get accurate token count for contents (text + multimodal) from API
+            # 2. Add estimated tokens for system_instruction and tools locally
+            try:
+                response = self.get_client().models.count_tokens(
+                    model=self.id,
+                    contents=contents,
+                )
+                total = response.total_tokens or 0
+            except Exception as e:
+                log_warning(f"Gemini count_tokens API failed: {e}. Falling back to tiktoken-based estimation.")
+                return super().count_tokens(messages, tools, output_schema)
+
+            # Add estimated tokens for system instruction (not supported by Google AI Studio API)
+            if system_instruction:
+                system_text = system_instruction if isinstance(system_instruction, str) else str(system_instruction)
+                total += count_text_tokens(system_text, self.id)
+
+            # Add estimated tokens for tools (not supported by Google AI Studio API)
+            if tools:
+                total += count_tool_tokens(tools, self.id)
+
+            # Add estimated tokens for response_format/output_schema
+            total += schema_tokens
+
+            return total
+
+    async def acount_tokens(
+        self,
+        messages: List[Message],
+        tools: Optional[List[Union[Function, Dict[str, Any]]]] = None,
+        output_schema: Optional[Union[Dict, Type[BaseModel]]] = None,
+    ) -> int:
+        contents, system_instruction = self._format_messages(messages, compress_tool_results=True)
+        schema_tokens = count_schema_tokens(output_schema, self.id)
+
+        # VertexAI supports full token counting with system_instruction and tools
+        if self.vertexai:
+            config: Dict[str, Any] = {}
+            if system_instruction:
+                config["system_instruction"] = system_instruction
+            if tools:
+                formatted_tools = self._format_tools(tools)
+                gemini_tools = format_function_definitions(formatted_tools)
+                if gemini_tools:
+                    config["tools"] = [gemini_tools]
+
+            response = await self.get_client().aio.models.count_tokens(
+                model=self.id,
+                contents=contents,
+                config=config if config else None,  # type: ignore
+            )
+            return (response.total_tokens or 0) + schema_tokens
+        else:
+            # Hybrid approach - Google AI Studio does not support system_instruction or tools in config
+            try:
+                response = await self.get_client().aio.models.count_tokens(
+                    model=self.id,
+                    contents=contents,
+                )
+                total = response.total_tokens or 0
+            except Exception as e:
+                log_warning(f"Gemini count_tokens API failed: {e}. Falling back to tiktoken-based estimation.")
+                return await super().acount_tokens(messages, tools, output_schema)
+
+            # Add estimated tokens for system instruction
+            if system_instruction:
+                system_text = system_instruction if isinstance(system_instruction, str) else str(system_instruction)
+                total += count_text_tokens(system_text, self.id)
+
+            # Add estimated tokens for tools
+            if tools:
+                total += count_tool_tokens(tools, self.id)
+
+            # Add estimated tokens for response_format/output_schema
+            total += schema_tokens
+
+            return total
+
     def invoke(
         self,
         messages: List[Message],
@@ -319,7 +473,7 @@ class Gemini(Model):
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         run_response: Optional[RunOutput] = None,
         compress_tool_results: bool = False,
-        retrying_with_guidance: bool = False,
+        retry_with_guidance: bool = False,
     ) -> ModelResponse:
         """
         Invokes the model with a list of messages and returns the response.
@@ -341,18 +495,23 @@ class Gemini(Model):
             assistant_message.metrics.stop_timer()
 
             model_response = self._parse_provider_response(
-                provider_response, response_format=response_format, retrying_with_guidance=retrying_with_guidance
+                provider_response, response_format=response_format, retry_with_guidance=retry_with_guidance
             )
 
             # If we were retrying the invoke with guidance, remove the guidance message
-            if retrying_with_guidance is True:
-                self._remove_temporarys(messages)
+            if retry_with_guidance is True:
+                self._remove_temporary_messages(messages)
 
             return model_response
 
         except (ClientError, ServerError) as e:
             log_error(f"Error from Gemini API: {e}")
-            error_message = str(e.response) if hasattr(e, "response") else str(e)
+            error_message = str(e)
+            if hasattr(e, "response"):
+                if hasattr(e.response, "text"):
+                    error_message = e.response.text
+                else:
+                    error_message = str(e.response)
             raise ModelProviderError(
                 message=error_message,
                 status_code=e.code if hasattr(e, "code") and e.code is not None else 502,
@@ -374,7 +533,7 @@ class Gemini(Model):
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         run_response: Optional[RunOutput] = None,
         compress_tool_results: bool = False,
-        retrying_with_guidance: bool = False,
+        retry_with_guidance: bool = False,
     ) -> Iterator[ModelResponse]:
         """
         Invokes the model with a list of messages and returns the response as a stream.
@@ -394,18 +553,24 @@ class Gemini(Model):
                 contents=formatted_messages,
                 **request_kwargs,
             ):
-                yield self._parse_provider_response_delta(response, retrying_with_guidance=retrying_with_guidance)
+                yield self._parse_provider_response_delta(response, retry_with_guidance=retry_with_guidance)
 
             # If we were retrying the invoke with guidance, remove the guidance message
-            if retrying_with_guidance is True:
-                self._remove_temporarys(messages)
+            if retry_with_guidance is True:
+                self._remove_temporary_messages(messages)
 
             assistant_message.metrics.stop_timer()
 
         except (ClientError, ServerError) as e:
             log_error(f"Error from Gemini API: {e}")
+            error_message = str(e)
+            if hasattr(e, "response"):
+                if hasattr(e.response, "text"):
+                    error_message = e.response.text
+                else:
+                    error_message = str(e.response)
             raise ModelProviderError(
-                message=str(e.response) if hasattr(e, "response") else str(e),
+                message=error_message,
                 status_code=e.code if hasattr(e, "code") and e.code is not None else 502,
                 model_name=self.name,
                 model_id=self.id,
@@ -425,7 +590,7 @@ class Gemini(Model):
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         run_response: Optional[RunOutput] = None,
         compress_tool_results: bool = False,
-        retrying_with_guidance: bool = False,
+        retry_with_guidance: bool = False,
     ) -> ModelResponse:
         """
         Invokes the model with a list of messages and returns the response.
@@ -449,19 +614,25 @@ class Gemini(Model):
             assistant_message.metrics.stop_timer()
 
             model_response = self._parse_provider_response(
-                provider_response, response_format=response_format, retrying_with_guidance=retrying_with_guidance
+                provider_response, response_format=response_format, retry_with_guidance=retry_with_guidance
             )
 
             # If we were retrying the invoke with guidance, remove the guidance message
-            if retrying_with_guidance is True:
-                self._remove_temporarys(messages)
+            if retry_with_guidance is True:
+                self._remove_temporary_messages(messages)
 
             return model_response
 
         except (ClientError, ServerError) as e:
             log_error(f"Error from Gemini API: {e}")
+            error_message = str(e)
+            if hasattr(e, "response"):
+                if hasattr(e.response, "text"):
+                    error_message = e.response.text
+                else:
+                    error_message = str(e.response)
             raise ModelProviderError(
-                message=str(e.response) if hasattr(e, "response") else str(e),
+                message=error_message,
                 status_code=e.code if hasattr(e, "code") and e.code is not None else 502,
                 model_name=self.name,
                 model_id=self.id,
@@ -481,7 +652,7 @@ class Gemini(Model):
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         run_response: Optional[RunOutput] = None,
         compress_tool_results: bool = False,
-        retrying_with_guidance: bool = False,
+        retry_with_guidance: bool = False,
     ) -> AsyncIterator[ModelResponse]:
         """
         Invokes the model with a list of messages and returns the response as a stream.
@@ -504,18 +675,24 @@ class Gemini(Model):
                 **request_kwargs,
             )
             async for chunk in async_stream:
-                yield self._parse_provider_response_delta(chunk, retrying_with_guidance=retrying_with_guidance)
+                yield self._parse_provider_response_delta(chunk, retry_with_guidance=retry_with_guidance)
 
             # If we were retrying the invoke with guidance, remove the guidance message
-            if retrying_with_guidance is True:
-                self._remove_temporarys(messages)
+            if retry_with_guidance is True:
+                self._remove_temporary_messages(messages)
 
             assistant_message.metrics.stop_timer()
 
         except (ClientError, ServerError) as e:
             log_error(f"Error from Gemini API: {e}")
+            error_message = str(e)
+            if hasattr(e, "response"):
+                if hasattr(e.response, "text"):
+                    error_message = e.response.text
+                else:
+                    error_message = str(e.response)
             raise ModelProviderError(
-                message=str(e.response) if hasattr(e, "response") else str(e),
+                message=error_message,
                 status_code=e.code if hasattr(e, "code") and e.code is not None else 502,
                 model_name=self.name,
                 model_id=self.id,
@@ -535,7 +712,6 @@ class Gemini(Model):
             compress_tool_results: Whether to compress tool results.
         """
         formatted_messages: List = []
-        file_content: Optional[Union[GeminiFile, Part]] = None
         system_message = None
 
         for message in messages:
@@ -658,13 +834,10 @@ class Gemini(Model):
                     for file in message.files:
                         file_content = self._format_file_for_message(file)
                         if isinstance(file_content, Part):
-                            formatted_messages.append(file_content)
+                            message_parts.append(file_content)
 
             final_message = Content(role=role, parts=message_parts)
             formatted_messages.append(final_message)
-
-            if isinstance(file_content, GeminiFile):
-                formatted_messages.insert(0, file_content)
 
         return formatted_messages, system_message
 
@@ -794,16 +967,30 @@ class Gemini(Model):
 
     def _format_file_for_message(self, file: File) -> Optional[Part]:
         # Case 1: File is a bytes object
-        if file.content and isinstance(file.content, bytes) and file.mime_type:
-            return Part.from_bytes(mime_type=file.mime_type, data=file.content)
+        if file.content and isinstance(file.content, bytes):
+            _mime = file.mime_type or mimetypes.guess_type(file.filename or "")[0] or "application/pdf"
+            return Part.from_bytes(mime_type=_mime, data=file.content)
 
         # Case 2: File is a URL
         elif file.url is not None:
+            # Case 2a: GCS URI (gs://) - pass directly to Gemini (supports up to 2GB)
+            if file.url.startswith("gs://"):
+                _mime = file.mime_type or mimetypes.guess_type(file.url)[0] or "application/pdf"
+                return Part.from_uri(file_uri=file.url, mime_type=_mime)
+
+            # Case 2b: HTTPS URL with known mime_type - pass directly to Gemini (supports up to 100MB)
+            # URLs without mime_type fall through to Case 2c (download + detect) because
+            # Gemini servers may not be able to access private/auth URLs directly.
+            if file.url.startswith("https://") and file.mime_type:
+                return Part.from_uri(file_uri=file.url, mime_type=file.mime_type)
+
+            # Case 2c: Other URL schemes - download and detect
             url_content = file.file_url_content
             if url_content is not None:
                 content, mime_type = url_content
-                if mime_type and content:
-                    return Part.from_bytes(mime_type=mime_type, data=content)
+                if content:
+                    _mime = mime_type or mimetypes.guess_type(file.url)[0] or "application/pdf"
+                    return Part.from_bytes(mime_type=_mime, data=content)
             log_warning(f"Failed to download file from {file.url}")
             return None
 
@@ -812,19 +999,10 @@ class Gemini(Model):
             file_path = file.filepath if isinstance(file.filepath, Path) else Path(file.filepath)
             if file_path.exists() and file_path.is_file():
                 if file_path.stat().st_size < 20 * 1024 * 1024:  # 20MB in bytes
-                    if file.mime_type:
-                        file_content = file_path.read_bytes()
-                        if file_content:
-                            return Part.from_bytes(mime_type=file.mime_type, data=file_content)
-                    else:
-                        import mimetypes
-
-                        mime_type_guess = mimetypes.guess_type(file_path)[0]
-                        if mime_type_guess is not None:
-                            file_content = file_path.read_bytes()
-                            if file_content:
-                                mime_type_str: str = str(mime_type_guess)
-                                return Part.from_bytes(mime_type=mime_type_str, data=file_content)
+                    file_content = file_path.read_bytes()
+                    if file_content:
+                        _mime = file.mime_type or mimetypes.guess_type(str(file_path))[0] or "application/pdf"
+                        return Part.from_bytes(mime_type=_mime, data=file_content)
                     return None
                 else:
                     clean_file_name = f"files/{file_path.stem.lower().replace('_', '')}"
@@ -874,6 +1052,8 @@ class Gemini(Model):
         """
         combined_original_content: List = []
         combined_function_result: List = []
+        tool_names: List[str] = []
+
         message_metrics = Metrics()
 
         if len(function_call_results) > 0:
@@ -883,13 +1063,18 @@ class Gemini(Model):
                 combined_function_result.append(
                     {"tool_call_id": result.tool_call_id, "tool_name": result.tool_name, "content": compressed_content}
                 )
+                if result.tool_name:
+                    tool_names.append(result.tool_name)
                 message_metrics += result.metrics
+
+        tool_name = ", ".join(tool_names) if tool_names else None
 
         if combined_original_content:
             messages.append(
                 Message(
                     role="tool",
                     content=combined_original_content,
+                    tool_name=tool_name,
                     tool_calls=combined_function_result,
                     metrics=message_metrics,
                 )
@@ -915,11 +1100,11 @@ class Gemini(Model):
             # Raise if the request failed because of a malformed function call
             if hasattr(candidate, "finish_reason") and candidate.finish_reason:
                 if candidate.finish_reason == GeminiFinishReason.MALFORMED_FUNCTION_CALL.value:
-                    # We only want to raise errors that trigger regeneration attempts once
-                    if kwargs.get("retrying_with_guidance") is True:
-                        pass
                     if self.retry_with_guidance:
-                        raise RetryableModelProviderError(retry_guidance_message=MALFORMED_FUNCTION_CALL_GUIDANCE)
+                        raise RetryableModelProviderError(
+                            retry_guidance_message=MALFORMED_FUNCTION_CALL_GUIDANCE,
+                            original_error=f"Generation ended with finish reason: {candidate.finish_reason}",
+                        )
 
             if candidate.content:
                 response_message = candidate.content
@@ -1079,9 +1264,11 @@ class Gemini(Model):
             # Raise if the request failed because of a malformed function call
             if hasattr(candidate, "finish_reason") and candidate.finish_reason:
                 if candidate.finish_reason == GeminiFinishReason.MALFORMED_FUNCTION_CALL.value:
-                    if kwargs.get("retrying_with_guidance") is True:
-                        pass
-                    raise RetryableModelProviderError(retry_guidance_message=MALFORMED_FUNCTION_CALL_GUIDANCE)
+                    if self.retry_with_guidance:
+                        raise RetryableModelProviderError(
+                            retry_guidance_message=MALFORMED_FUNCTION_CALL_GUIDANCE,
+                            original_error=f"Generation ended with finish reason: {candidate.finish_reason}",
+                        )
 
             response_message: Content = Content(role="model", parts=[])
             if candidate_content is not None:

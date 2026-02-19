@@ -121,6 +121,15 @@ class MySQLDb(BaseDb):
         # Initialize database session
         self.Session: scoped_session = scoped_session(sessionmaker(bind=self.db_engine))
 
+    def close(self) -> None:
+        """Close database connections and dispose of the connection pool.
+
+        Should be called during application shutdown to properly release
+        all database connections.
+        """
+        if self.db_engine is not None:
+            self.db_engine.dispose()
+
     # -- DB methods --
     def table_exists(self, table_name: str) -> bool:
         """Check if a table with the given name exists in the MySQL database.
@@ -146,7 +155,10 @@ class MySQLDb(BaseDb):
             Table: SQLAlchemy Table object
         """
         try:
-            table_schema = get_table_schema_definition(table_type).copy()
+            # Pass traces_table_name and db_schema for spans table foreign key resolution
+            table_schema = get_table_schema_definition(
+                table_type, traces_table_name=self.trace_table_name, db_schema=self.db_schema
+            ).copy()
 
             columns: List[Column] = []
             indexes: List[str] = []
@@ -169,12 +181,7 @@ class MySQLDb(BaseDb):
 
                 # Handle foreign key constraint
                 if "foreign_key" in col_config:
-                    fk_ref = col_config["foreign_key"]
-                    # For spans table, dynamically replace the traces table reference
-                    # with the actual trace table name configured for this db instance
-                    if table_type == "spans" and "trace_id" in fk_ref:
-                        fk_ref = f"{self.db_schema}.{self.trace_table_name}.trace_id"
-                    column_args.append(ForeignKey(fk_ref))
+                    column_args.append(ForeignKey(col_config["foreign_key"]))
 
                 columns.append(Column(*column_args, **column_kwargs))  # type: ignore
 
@@ -418,12 +425,13 @@ class MySQLDb(BaseDb):
             sess.execute(stmt)
 
     # -- Session methods --
-    def delete_session(self, session_id: str) -> bool:
+    def delete_session(self, session_id: str, user_id: Optional[str] = None) -> bool:
         """
         Delete a session from the database.
 
         Args:
             session_id (str): ID of the session to delete
+            user_id (Optional[str]): User ID to filter by. Defaults to None.
 
         Returns:
             bool: True if the session was deleted, False otherwise.
@@ -438,6 +446,8 @@ class MySQLDb(BaseDb):
 
             with self.Session() as sess, sess.begin():
                 delete_stmt = table.delete().where(table.c.session_id == session_id)
+                if user_id is not None:
+                    delete_stmt = delete_stmt.where(table.c.user_id == user_id)
                 result = sess.execute(delete_stmt)
                 if result.rowcount == 0:
                     log_debug(f"No session found to delete with session_id: {session_id} in table {table.name}")
@@ -450,12 +460,13 @@ class MySQLDb(BaseDb):
             log_error(f"Error deleting session: {e}")
             return False
 
-    def delete_sessions(self, session_ids: List[str]) -> None:
+    def delete_sessions(self, session_ids: List[str], user_id: Optional[str] = None) -> None:
         """Delete all given sessions from the database.
         Can handle multiple session types in the same run.
 
         Args:
             session_ids (List[str]): The IDs of the sessions to delete.
+            user_id (Optional[str]): User ID to filter by. Defaults to None.
 
         Raises:
             Exception: If an error occurs during deletion.
@@ -467,6 +478,8 @@ class MySQLDb(BaseDb):
 
             with self.Session() as sess, sess.begin():
                 delete_stmt = table.delete().where(table.c.session_id.in_(session_ids))
+                if user_id is not None:
+                    delete_stmt = delete_stmt.where(table.c.user_id == user_id)
                 result = sess.execute(delete_stmt)
 
             log_debug(f"Successfully deleted {result.rowcount} sessions")
@@ -635,7 +648,12 @@ class MySQLDb(BaseDb):
             raise e
 
     def rename_session(
-        self, session_id: str, session_type: SessionType, session_name: str, deserialize: Optional[bool] = True
+        self,
+        session_id: str,
+        session_type: SessionType,
+        session_name: str,
+        user_id: Optional[str] = None,
+        deserialize: Optional[bool] = True,
     ) -> Optional[Union[Session, Dict[str, Any]]]:
         """
         Rename a session in the database.
@@ -644,6 +662,7 @@ class MySQLDb(BaseDb):
             session_id (str): The ID of the session to rename.
             session_type (SessionType): The type of session to rename.
             session_name (str): The new name for the session.
+            user_id (Optional[str]): User ID to filter by. Defaults to None.
             deserialize (Optional[bool]): Whether to serialize the session. Defaults to True.
 
         Returns:
@@ -667,10 +686,14 @@ class MySQLDb(BaseDb):
                     .where(table.c.session_type == session_type.value)
                     .values(session_data=func.json_set(table.c.session_data, "$.session_name", session_name))
                 )
+                if user_id is not None:
+                    stmt = stmt.where(table.c.user_id == user_id)
                 sess.execute(stmt)
 
                 # Fetch the updated row
                 select_stmt = select(table).where(table.c.session_id == session_id)
+                if user_id is not None:
+                    select_stmt = select_stmt.where(table.c.user_id == user_id)
                 result = sess.execute(select_stmt)
                 row = result.fetchone()
                 if not row:
@@ -721,6 +744,16 @@ class MySQLDb(BaseDb):
 
             if isinstance(session, AgentSession):
                 with self.Session() as sess, sess.begin():
+                    existing_row = sess.execute(
+                        select(table.c.user_id)
+                        .where(table.c.session_id == session_dict.get("session_id"))
+                        .with_for_update()
+                    ).fetchone()
+                    if existing_row is not None:
+                        existing_uid = existing_row[0]
+                        if existing_uid is not None and existing_uid != session_dict.get("user_id"):
+                            return None
+
                     stmt = mysql.insert(table).values(
                         session_id=session_dict.get("session_id"),
                         session_type=SessionType.AGENT.value,
@@ -759,6 +792,16 @@ class MySQLDb(BaseDb):
 
             elif isinstance(session, TeamSession):
                 with self.Session() as sess, sess.begin():
+                    existing_row = sess.execute(
+                        select(table.c.user_id)
+                        .where(table.c.session_id == session_dict.get("session_id"))
+                        .with_for_update()
+                    ).fetchone()
+                    if existing_row is not None:
+                        existing_uid = existing_row[0]
+                        if existing_uid is not None and existing_uid != session_dict.get("user_id"):
+                            return None
+
                     stmt = mysql.insert(table).values(
                         session_id=session_dict.get("session_id"),
                         session_type=SessionType.TEAM.value,
@@ -797,6 +840,16 @@ class MySQLDb(BaseDb):
 
             else:
                 with self.Session() as sess, sess.begin():
+                    existing_row = sess.execute(
+                        select(table.c.user_id)
+                        .where(table.c.session_id == session_dict.get("session_id"))
+                        .with_for_update()
+                    ).fetchone()
+                    if existing_row is not None:
+                        existing_uid = existing_row[0]
+                        if existing_uid is not None and existing_uid != session_dict.get("user_id"):
+                            return None
+
                     stmt = mysql.insert(table).values(
                         session_id=session_dict.get("session_id"),
                         session_type=SessionType.WORKFLOW.value,
@@ -1778,6 +1831,7 @@ class MySQLDb(BaseDb):
         page: Optional[int] = None,
         sort_by: Optional[str] = None,
         sort_order: Optional[str] = None,
+        linked_to: Optional[str] = None,
     ) -> Tuple[List[KnowledgeRow], int]:
         """Get all knowledge contents from the database.
 
@@ -1786,7 +1840,7 @@ class MySQLDb(BaseDb):
             page (Optional[int]): The page number.
             sort_by (Optional[str]): The column to sort by.
             sort_order (Optional[str]): The order to sort by.
-            create_table_if_not_found (Optional[bool]): Whether to create the table if it doesn't exist.
+            linked_to (Optional[str]): Filter by linked_to value (knowledge instance name).
 
         Returns:
             Tuple[List[KnowledgeRow], int]: The knowledge contents and total count.
@@ -1801,6 +1855,10 @@ class MySQLDb(BaseDb):
         try:
             with self.Session() as sess, sess.begin():
                 stmt = select(table)
+
+                # Apply linked_to filter if provided
+                if linked_to is not None:
+                    stmt = stmt.where(table.c.linked_to == linked_to)
 
                 # Apply sorting
                 if sort_by is not None:
@@ -2452,85 +2510,110 @@ class MySQLDb(BaseDb):
             # Fallback if spans table doesn't exist
             return select(table, literal(0).label("total_spans"), literal(0).label("error_count"))
 
-    def create_trace(self, trace: "Trace") -> None:
-        """Create a single trace record in the database.
+    def _get_trace_component_level_expr(self, workflow_id_col, team_id_col, agent_id_col, name_col):
+        """Build a SQL CASE expression that returns the component level for a trace.
+
+        Component levels (higher = more important):
+            - 3: Workflow root (.run or .arun with workflow_id)
+            - 2: Team root (.run or .arun with team_id)
+            - 1: Agent root (.run or .arun with agent_id)
+            - 0: Child span (not a root)
+
+        Args:
+            workflow_id_col: SQL column/expression for workflow_id
+            team_id_col: SQL column/expression for team_id
+            agent_id_col: SQL column/expression for agent_id
+            name_col: SQL column/expression for name
+
+        Returns:
+            SQLAlchemy CASE expression returning the component level as an integer.
+        """
+        from sqlalchemy import and_, case, or_
+
+        is_root_name = or_(name_col.like("%.run%"), name_col.like("%.arun%"))
+
+        return case(
+            # Workflow root (level 3)
+            (and_(workflow_id_col.isnot(None), is_root_name), 3),
+            # Team root (level 2)
+            (and_(team_id_col.isnot(None), is_root_name), 2),
+            # Agent root (level 1)
+            (and_(agent_id_col.isnot(None), is_root_name), 1),
+            # Child span or unknown (level 0)
+            else_=0,
+        )
+
+    def upsert_trace(self, trace: "Trace") -> None:
+        """Create or update a single trace record in the database.
+
+        Uses INSERT ... ON DUPLICATE KEY UPDATE (upsert) to handle concurrent inserts
+        atomically and avoid race conditions.
 
         Args:
             trace: The Trace object to store (one per trace_id).
         """
+        from sqlalchemy import case
+
         try:
             table = self._get_table(table_type="traces", create_table_if_not_found=True)
             if table is None:
                 return
 
+            trace_dict = trace.to_dict()
+            trace_dict.pop("total_spans", None)
+            trace_dict.pop("error_count", None)
+
             with self.Session() as sess, sess.begin():
-                # Check if trace exists
-                existing = sess.execute(select(table).where(table.c.trace_id == trace.trace_id)).fetchone()
+                # Use upsert to handle concurrent inserts atomically
+                # On conflict, update fields while preserving existing non-null context values
+                # and keeping the earliest start_time
+                insert_stmt = mysql.insert(table).values(trace_dict)
 
-                if existing:
-                    # workflow (level 3) > team (level 2) > agent (level 1) > child/unknown (level 0)
+                # Build component level expressions for comparing trace priority
+                new_level = self._get_trace_component_level_expr(
+                    insert_stmt.inserted.workflow_id,
+                    insert_stmt.inserted.team_id,
+                    insert_stmt.inserted.agent_id,
+                    insert_stmt.inserted.name,
+                )
+                existing_level = self._get_trace_component_level_expr(
+                    table.c.workflow_id,
+                    table.c.team_id,
+                    table.c.agent_id,
+                    table.c.name,
+                )
 
-                    def get_component_level(workflow_id, team_id, agent_id, name):
-                        # Check if name indicates a root span
-                        is_root_name = ".run" in name or ".arun" in name
-
-                        if not is_root_name:
-                            return 0  # Child span (not a root)
-                        elif workflow_id:
-                            return 3  # Workflow root
-                        elif team_id:
-                            return 2  # Team root
-                        elif agent_id:
-                            return 1  # Agent root
-                        else:
-                            return 0  # Unknown
-
-                    existing_level = get_component_level(
-                        existing.workflow_id, existing.team_id, existing.agent_id, existing.name
+                # Build the ON DUPLICATE KEY UPDATE clause
+                # Use LEAST for start_time, GREATEST for end_time to capture full trace duration
+                # MySQL stores timestamps as ISO strings, so string comparison works for ISO format
+                # Duration is calculated using TIMESTAMPDIFF in microseconds then converted to ms
+                upsert_stmt = insert_stmt.on_duplicate_key_update(
+                    end_time=func.greatest(table.c.end_time, insert_stmt.inserted.end_time),
+                    start_time=func.least(table.c.start_time, insert_stmt.inserted.start_time),
+                    # Calculate duration in milliseconds using TIMESTAMPDIFF
+                    # TIMESTAMPDIFF(MICROSECOND, start, end) / 1000 gives milliseconds
+                    duration_ms=func.timestampdiff(
+                        text("MICROSECOND"),
+                        func.least(table.c.start_time, insert_stmt.inserted.start_time),
+                        func.greatest(table.c.end_time, insert_stmt.inserted.end_time),
                     )
-                    new_level = get_component_level(trace.workflow_id, trace.team_id, trace.agent_id, trace.name)
-
-                    # Only update name if new trace is from a higher or equal level
-                    should_update_name = new_level > existing_level
-
-                    # Parse existing start_time to calculate correct duration
-                    existing_start_time_str = existing.start_time
-                    if isinstance(existing_start_time_str, str):
-                        existing_start_time = datetime.fromisoformat(existing_start_time_str.replace("Z", "+00:00"))
-                    else:
-                        existing_start_time = trace.start_time
-
-                    recalculated_duration_ms = int((trace.end_time - existing_start_time).total_seconds() * 1000)
-
-                    update_values = {
-                        "end_time": trace.end_time.isoformat(),
-                        "duration_ms": recalculated_duration_ms,
-                        "status": trace.status,
-                        "name": trace.name if should_update_name else existing.name,
-                    }
-
-                    # Update context fields ONLY if new value is not None (preserve non-null values)
-                    if trace.run_id is not None:
-                        update_values["run_id"] = trace.run_id
-                    if trace.session_id is not None:
-                        update_values["session_id"] = trace.session_id
-                    if trace.user_id is not None:
-                        update_values["user_id"] = trace.user_id
-                    if trace.agent_id is not None:
-                        update_values["agent_id"] = trace.agent_id
-                    if trace.team_id is not None:
-                        update_values["team_id"] = trace.team_id
-                    if trace.workflow_id is not None:
-                        update_values["workflow_id"] = trace.workflow_id
-
-                    stmt = update(table).where(table.c.trace_id == trace.trace_id).values(**update_values)
-                    sess.execute(stmt)
-                else:
-                    trace_dict = trace.to_dict()
-                    trace_dict.pop("total_spans", None)
-                    trace_dict.pop("error_count", None)
-                    stmt = mysql.insert(table).values(trace_dict)
-                    sess.execute(stmt)
+                    / 1000,
+                    status=insert_stmt.inserted.status,
+                    # Update name only if new trace is from a higher-level component
+                    # Priority: workflow (3) > team (2) > agent (1) > child spans (0)
+                    name=case(
+                        (new_level > existing_level, insert_stmt.inserted.name),
+                        else_=table.c.name,
+                    ),
+                    # Preserve existing non-null context values using COALESCE
+                    run_id=func.coalesce(insert_stmt.inserted.run_id, table.c.run_id),
+                    session_id=func.coalesce(insert_stmt.inserted.session_id, table.c.session_id),
+                    user_id=func.coalesce(insert_stmt.inserted.user_id, table.c.user_id),
+                    agent_id=func.coalesce(insert_stmt.inserted.agent_id, table.c.agent_id),
+                    team_id=func.coalesce(insert_stmt.inserted.team_id, table.c.team_id),
+                    workflow_id=func.coalesce(insert_stmt.inserted.workflow_id, table.c.workflow_id),
+                )
+                sess.execute(upsert_stmt)
 
         except Exception as e:
             log_error(f"Error creating trace: {e}")
@@ -2644,7 +2727,7 @@ class MySQLDb(BaseDb):
                     base_stmt = base_stmt.where(table.c.run_id == run_id)
                 if session_id:
                     base_stmt = base_stmt.where(table.c.session_id == session_id)
-                if user_id:
+                if user_id is not None:
                     base_stmt = base_stmt.where(table.c.user_id == user_id)
                 if agent_id:
                     base_stmt = base_stmt.where(table.c.agent_id == agent_id)
@@ -2732,7 +2815,7 @@ class MySQLDb(BaseDb):
                 )
 
                 # Apply filters
-                if user_id:
+                if user_id is not None:
                     base_stmt = base_stmt.where(table.c.user_id == user_id)
                 if workflow_id:
                     base_stmt = base_stmt.where(table.c.workflow_id == workflow_id)
@@ -2896,3 +2979,50 @@ class MySQLDb(BaseDb):
         except Exception as e:
             log_error(f"Error getting spans: {e}")
             return []
+
+    # -- Learning methods (stubs) --
+    def get_learning(
+        self,
+        learning_type: str,
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        team_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        namespace: Optional[str] = None,
+        entity_id: Optional[str] = None,
+        entity_type: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        raise NotImplementedError("Learning methods not yet implemented for MySQLDb")
+
+    def upsert_learning(
+        self,
+        id: str,
+        learning_type: str,
+        content: Dict[str, Any],
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        team_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        namespace: Optional[str] = None,
+        entity_id: Optional[str] = None,
+        entity_type: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        raise NotImplementedError("Learning methods not yet implemented for MySQLDb")
+
+    def delete_learning(self, id: str) -> bool:
+        raise NotImplementedError("Learning methods not yet implemented for MySQLDb")
+
+    def get_learnings(
+        self,
+        learning_type: Optional[str] = None,
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        team_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        namespace: Optional[str] = None,
+        entity_id: Optional[str] = None,
+        entity_type: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        raise NotImplementedError("Learning methods not yet implemented for MySQLDb")

@@ -102,7 +102,7 @@ class Qdrant(VectorDb):
             from agno.knowledge.embedder.openai import OpenAIEmbedder
 
             embedder = OpenAIEmbedder()
-            log_info("Embedder not provided, using OpenAIEmbedder as default.")
+            log_debug("Embedder not provided, using OpenAIEmbedder as default.")
 
         self.embedder: Embedder = embedder
         self.dimensions: Optional[int] = self.embedder.dimensions
@@ -259,33 +259,6 @@ class Qdrant(VectorDb):
                 else None,
             )
 
-    def doc_exists(self, document: Document) -> bool:
-        """
-        Validating if the document exists or not
-
-        Args:
-            document (Document): Document to validate
-        """
-        if self.client:
-            cleaned_content = document.content.replace("\x00", "\ufffd")
-            doc_id = md5(cleaned_content.encode()).hexdigest()
-            collection_points = self.client.retrieve(
-                collection_name=self.collection,
-                ids=[doc_id],
-            )
-            return len(collection_points) > 0
-        return False
-
-    async def async_doc_exists(self, document: Document) -> bool:
-        """Check if a document exists asynchronously."""
-        cleaned_content = document.content.replace("\x00", "\ufffd")
-        doc_id = md5(cleaned_content.encode()).hexdigest()
-        collection_points = await self.async_client.retrieve(
-            collection_name=self.collection,
-            ids=[doc_id],
-        )
-        return len(collection_points) > 0
-
     def name_exists(self, name: str) -> bool:
         """
         Validates if a document with the given name exists in the collection.
@@ -347,7 +320,9 @@ class Qdrant(VectorDb):
         points = []
         for document in documents:
             cleaned_content = document.content.replace("\x00", "\ufffd")
-            doc_id = md5(cleaned_content.encode()).hexdigest()
+            # Include content_hash in ID to ensure uniqueness across different content hashes
+            base_id = document.id or md5(cleaned_content.encode()).hexdigest()
+            doc_id = md5(f"{base_id}_{content_hash}".encode()).hexdigest()
 
             # TODO(v2.0.0): Remove conditional vector naming logic
             if self.use_named_vectors:
@@ -448,16 +423,18 @@ class Qdrant(VectorDb):
                         # Fall back to individual embedding
                         for doc in documents:
                             if self.search_type in [SearchType.vector, SearchType.hybrid]:
-                                doc.embed(embedder=self.embedder)
+                                await doc.async_embed(embedder=self.embedder)
             else:
                 # Use individual embedding
                 for doc in documents:
                     if self.search_type in [SearchType.vector, SearchType.hybrid]:
-                        doc.embed(embedder=self.embedder)
+                        await doc.async_embed(embedder=self.embedder)
 
         async def process_document(document):
             cleaned_content = document.content.replace("\x00", "\ufffd")
-            doc_id = md5(cleaned_content.encode()).hexdigest()
+            # Include content_hash in ID to ensure uniqueness across different content hashes
+            base_id = document.id or md5(cleaned_content.encode()).hexdigest()
+            doc_id = md5(f"{base_id}_{content_hash}".encode()).hexdigest()
 
             if self.search_type == SearchType.vector:
                 # For vector search, maintain backward compatibility with unnamed vectors
@@ -657,7 +634,7 @@ class Qdrant(VectorDb):
         limit: int,
         formatted_filters: Optional[models.Filter],
     ) -> List[models.ScoredPoint]:
-        dense_embedding = self.embedder.get_embedding(query)
+        dense_embedding = await self.embedder.async_get_embedding(query)
 
         # TODO(v2.0.0): Remove this conditional and always use named vectors
         if self.use_named_vectors:
@@ -706,7 +683,7 @@ class Qdrant(VectorDb):
         limit: int,
         formatted_filters: Optional[models.Filter],
     ) -> List[models.ScoredPoint]:
-        dense_embedding = self.embedder.get_embedding(query)
+        dense_embedding = await self.embedder.async_get_embedding(query)
         sparse_embedding = next(iter(self.sparse_encoder.embed([query]))).as_object()
         call = await self.async_client.query_points(
             collection_name=self.collection,
