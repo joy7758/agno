@@ -31,6 +31,7 @@ class Telegram(BaseInterface):
         start_message: str = DEFAULT_START_MESSAGE,
         help_message: str = DEFAULT_HELP_MESSAGE,
         error_message: str = DEFAULT_ERROR_MESSAGE,
+        stream: bool = False,
     ):
         self.agent = agent
         self.team = team
@@ -42,6 +43,7 @@ class Telegram(BaseInterface):
         self.start_message = start_message
         self.help_message = help_message
         self.error_message = error_message
+        self.stream = stream
 
         if not (self.agent or self.team or self.workflow):
             raise ValueError("Telegram requires an agent, team, or workflow")
@@ -59,6 +61,7 @@ class Telegram(BaseInterface):
             start_message=self.start_message,
             help_message=self.help_message,
             error_message=self.error_message,
+            stream=self.stream,
         )
 
         return self.router
