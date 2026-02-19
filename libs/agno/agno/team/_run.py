@@ -391,7 +391,7 @@ def _run_tasks(
         if team.session_summary_manager is not None:
             session.upsert_run(run_response=run_response)
             try:
-                team.session_summary_manager.create_session_summary(session=session)
+                team.session_summary_manager.create_session_summary(session=session, run_response=run_response)
             except Exception as e:
                 log_warning(f"Error in session summary creation: {str(e)}")
 
@@ -696,7 +696,7 @@ def _run(
                     # Upsert the RunOutput to Team Session before creating the session summary
                     session.upsert_run(run_response=run_response)
                     try:
-                        team.session_summary_manager.create_session_summary(session=session)
+                        team.session_summary_manager.create_session_summary(session=session, run_response=run_response)
                     except Exception as e:
                         log_warning(f"Error in session summary creation: {str(e)}")
 
@@ -1102,7 +1102,7 @@ def _run_stream(
                             store_events=team.store_events,
                         )
                     try:
-                        team.session_summary_manager.create_session_summary(session=session)
+                        team.session_summary_manager.create_session_summary(session=session, run_response=run_response)
                     except Exception as e:
                         log_warning(f"Error in session summary creation: {str(e)}")
                     if stream_events:
@@ -1668,7 +1668,9 @@ async def _arun_tasks(
         if team.session_summary_manager is not None:
             team_session.upsert_run(run_response=run_response)
             try:
-                await team.session_summary_manager.acreate_session_summary(session=team_session)
+                await team.session_summary_manager.acreate_session_summary(
+                    session=team_session, run_response=run_response
+                )
             except Exception as e:
                 log_warning(f"Error in session summary creation: {str(e)}")
 
@@ -2008,7 +2010,9 @@ async def _arun(
                     # Upsert the RunOutput to Team Session before creating the session summary
                     team_session.upsert_run(run_response=run_response)
                     try:
-                        await team.session_summary_manager.acreate_session_summary(session=team_session)
+                        await team.session_summary_manager.acreate_session_summary(
+                            session=team_session, run_response=run_response
+                        )
                     except Exception as e:
                         log_warning(f"Error in session summary creation: {str(e)}")
 
@@ -2527,7 +2531,9 @@ async def _arun_stream(
                             store_events=team.store_events,
                         )
                     try:
-                        await team.session_summary_manager.acreate_session_summary(session=team_session)
+                        await team.session_summary_manager.acreate_session_summary(
+                            session=team_session, run_response=run_response
+                        )
                     except Exception as e:
                         log_warning(f"Error in session summary creation: {str(e)}")
                     if stream_events:
@@ -3959,7 +3965,7 @@ def _continue_run(
                 if team.session_summary_manager is not None:
                     session.upsert_run(run_response=run_response)
                     try:
-                        team.session_summary_manager.create_session_summary(session=session)
+                        team.session_summary_manager.create_session_summary(session=session, run_response=run_response)
                     except Exception as e:
                         log_warning(f"Error in session summary creation: {str(e)}")
 
@@ -4185,7 +4191,7 @@ def _continue_run_stream(
                             store_events=team.store_events,
                         )
                     try:
-                        team.session_summary_manager.create_session_summary(session=session)
+                        team.session_summary_manager.create_session_summary(session=session, run_response=run_response)
                     except Exception as e:
                         log_warning(f"Error in session summary creation: {str(e)}")
                     if stream_events:
@@ -4629,7 +4635,9 @@ async def _acontinue_run(
                 if team.session_summary_manager is not None:
                     team_session.upsert_run(run_response=run_response)
                     try:
-                        await team.session_summary_manager.acreate_session_summary(session=team_session)
+                        await team.session_summary_manager.acreate_session_summary(
+                            session=team_session, run_response=run_response
+                        )
                     except Exception as e:
                         log_warning(f"Error in session summary creation: {str(e)}")
 
@@ -4991,7 +4999,9 @@ async def _acontinue_run_stream(
                             store_events=team.store_events,
                         )
                     try:
-                        await team.session_summary_manager.acreate_session_summary(session=team_session)
+                        await team.session_summary_manager.acreate_session_summary(
+                            session=team_session, run_response=run_response
+                        )
                     except Exception as e:
                         log_warning(f"Error in session summary creation: {str(e)}")
                     if stream_events:

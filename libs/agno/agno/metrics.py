@@ -627,7 +627,9 @@ def accumulate_model_metrics(
 
     # Accumulate cost
     if usage.cost is not None:
-        run_response.metrics.cost = (run_response.metrics.cost if run_response.metrics.cost is not None else 0) + usage.cost
+        run_response.metrics.cost = (
+            run_response.metrics.cost if run_response.metrics.cost is not None else 0
+        ) + usage.cost
 
     # Handle time_to_first_token: only set top-level if model_type is "model" or "reasoning_model"
     # and current value is None or later (we want the earliest)
@@ -647,15 +649,17 @@ def accumulate_model_metrics(
 def accumulate_eval_metrics(
     eval_response: "RunOutput",
     run_response: "Union[RunOutput, TeamRunOutput]",
+    prefix: str = "eval",
 ) -> None:
-    """Accumulate eval model metrics from an evaluator's RunOutput into the original run_response.
+    """Accumulate child agent metrics from a RunOutput into the original run_response.
 
-    This merges the evaluator agent's metrics (tracked in its own RunOutput) back into the
-    original agent's run_output under "eval_model" keys in details.
+    This merges a child agent's metrics (tracked in its own RunOutput) back into the
+    original agent's run_output under "{prefix}_model" keys in details.
 
     Args:
-        eval_response: The RunOutput from the evaluator agent's run
-        run_response: The original agent's RunOutput to accumulate eval metrics into
+        eval_response: The RunOutput from the child agent's run (eval, reasoning, etc.)
+        run_response: The original agent's RunOutput to accumulate metrics into
+        prefix: Key prefix for detail keys (e.g., "eval" -> "eval_model", "reasoning" -> "reasoning_model")
     """
     if eval_response.metrics is None:
         return
@@ -670,13 +674,13 @@ def accumulate_eval_metrics(
     if run_response.metrics.details is None:
         run_response.metrics.details = {}
 
-    # Copy over model details from eval under "eval_<model_type>" keys
+    # Copy over model details under "{prefix}_<model_type>" keys
     if eval_metrics.details:
         for model_type, model_metrics_list in eval_metrics.details.items():
-            eval_key = f"eval_{model_type}" if not model_type.startswith("eval_") else model_type
-            if eval_key not in run_response.metrics.details:
-                run_response.metrics.details[eval_key] = []
-            run_response.metrics.details[eval_key].extend(model_metrics_list)
+            prefixed_key = f"{prefix}_{model_type}" if not model_type.startswith(f"{prefix}_") else model_type
+            if prefixed_key not in run_response.metrics.details:
+                run_response.metrics.details[prefixed_key] = []
+            run_response.metrics.details[prefixed_key].extend(model_metrics_list)
 
     # Accumulate top-level token counts
     run_response.metrics.input_tokens += eval_metrics.input_tokens
@@ -691,10 +695,12 @@ def accumulate_eval_metrics(
 
     # Accumulate cost
     if eval_metrics.cost is not None:
-        run_response.metrics.cost = (run_response.metrics.cost if run_response.metrics.cost is not None else 0) + eval_metrics.cost
+        run_response.metrics.cost = (
+            run_response.metrics.cost if run_response.metrics.cost is not None else 0
+        ) + eval_metrics.cost
 
-    # Accumulate eval duration
-    if eval_metrics.duration is not None:
+    # Accumulate eval duration (only for eval hooks, not reasoning/other sub-agents)
+    if prefix == "eval" and eval_metrics.duration is not None:
         if run_response.metrics.additional_metrics is None:
             run_response.metrics.additional_metrics = {}
         existing = run_response.metrics.additional_metrics.get("eval_duration", 0)

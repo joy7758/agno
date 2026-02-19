@@ -515,10 +515,12 @@ def _run(
                 raise_if_cancelled(run_response.run_id)  # type: ignore
 
                 # If an output model is provided, generate output using the output model
-                generate_response_with_output_model(agent, model_response, run_messages)
+                generate_response_with_output_model(agent, model_response, run_messages, run_response=run_response)
 
                 # If a parser model is provided, structure the response separately
-                parse_response_with_parser_model(agent, model_response, run_messages, run_context=run_context)
+                parse_response_with_parser_model(
+                    agent, model_response, run_messages, run_context=run_context, run_response=run_response
+                )
 
                 # 7. Update the RunOutput with the model response
                 update_run_response(
@@ -582,7 +584,9 @@ def _run(
                     # Upsert the RunOutput to Agent Session before creating the session summary
                     agent_session.upsert_run(run=run_response)
                     try:
-                        agent.session_summary_manager.create_session_summary(session=agent_session)
+                        agent.session_summary_manager.create_session_summary(
+                            session=agent_session, run_response=run_response
+                        )
                     except Exception as e:
                         log_warning(f"Error in session summary creation: {str(e)}")
 
@@ -1024,7 +1028,9 @@ def _run_stream(
                             store_events=agent.store_events,
                         )
                     try:
-                        agent.session_summary_manager.create_session_summary(session=agent_session)
+                        agent.session_summary_manager.create_session_summary(
+                            session=agent_session, run_response=run_response
+                        )
                     except Exception as e:
                         log_warning(f"Error in session summary creation: {str(e)}")
                     if stream_events:
@@ -1571,12 +1577,16 @@ async def _arun(
 
                 # If an output model is provided, generate output using the output model
                 await agenerate_response_with_output_model(
-                    agent, model_response=model_response, run_messages=run_messages
+                    agent, model_response=model_response, run_messages=run_messages, run_response=run_response
                 )
 
                 # If a parser model is provided, structure the response separately
                 await aparse_response_with_parser_model(
-                    agent, model_response=model_response, run_messages=run_messages, run_context=run_context
+                    agent,
+                    model_response=model_response,
+                    run_messages=run_messages,
+                    run_context=run_context,
+                    run_response=run_response,
                 )
 
                 # 10. Update the RunOutput with the model response
@@ -1640,7 +1650,9 @@ async def _arun(
                     # Upsert the RunOutput to Agent Session before creating the session summary
                     agent_session.upsert_run(run=run_response)
                     try:
-                        await agent.session_summary_manager.acreate_session_summary(session=agent_session)
+                        await agent.session_summary_manager.acreate_session_summary(
+                            session=agent_session, run_response=run_response
+                        )
                     except Exception as e:
                         log_warning(f"Error in session summary creation: {str(e)}")
 
@@ -2192,7 +2204,9 @@ async def _arun_stream(
                             store_events=agent.store_events,
                         )
                     try:
-                        await agent.session_summary_manager.acreate_session_summary(session=agent_session)
+                        await agent.session_summary_manager.acreate_session_summary(
+                            session=agent_session, run_response=run_response
+                        )
                     except Exception as e:
                         log_warning(f"Error in session summary creation: {str(e)}")
                     if stream_events:
@@ -2872,10 +2886,12 @@ def _continue_run(
                 raise_if_cancelled(run_response.run_id)  # type: ignore
 
                 # If an output model is provided, generate output using the output model
-                generate_response_with_output_model(agent, model_response, run_messages)
+                generate_response_with_output_model(agent, model_response, run_messages, run_response=run_response)
 
                 # If a parser model is provided, structure the response separately
-                parse_response_with_parser_model(agent, model_response, run_messages, run_context=run_context)
+                parse_response_with_parser_model(
+                    agent, model_response, run_messages, run_context=run_context, run_response=run_response
+                )
 
                 # 3. Update the RunOutput with the model response
                 update_run_response(
@@ -2922,7 +2938,7 @@ def _continue_run(
                     session.upsert_run(run=run_response)
 
                     try:
-                        agent.session_summary_manager.create_session_summary(session=session)
+                        agent.session_summary_manager.create_session_summary(session=session, run_response=run_response)
                     except Exception as e:
                         log_warning(f"Error in session summary creation: {str(e)}")
 
@@ -3143,7 +3159,7 @@ def _continue_run_stream(
                             store_events=agent.store_events,
                         )
                     try:
-                        agent.session_summary_manager.create_session_summary(session=session)
+                        agent.session_summary_manager.create_session_summary(session=session, run_response=run_response)
                     except Exception as e:
                         log_warning(f"Error in session summary creation: {str(e)}")
 
@@ -3600,12 +3616,16 @@ async def _acontinue_run(
 
                 # If an output model is provided, generate output using the output model
                 await agenerate_response_with_output_model(
-                    agent, model_response=model_response, run_messages=run_messages
+                    agent, model_response=model_response, run_messages=run_messages, run_response=run_response
                 )
 
                 # If a parser model is provided, structure the response separately
                 await aparse_response_with_parser_model(
-                    agent, model_response=model_response, run_messages=run_messages, run_context=run_context
+                    agent,
+                    model_response=model_response,
+                    run_messages=run_messages,
+                    run_context=run_context,
+                    run_response=run_response,
                 )
 
                 # 9. Update the RunOutput with the model response
@@ -3660,7 +3680,9 @@ async def _acontinue_run(
                     agent_session.upsert_run(run=run_response)
 
                     try:
-                        await agent.session_summary_manager.acreate_session_summary(session=agent_session)
+                        await agent.session_summary_manager.acreate_session_summary(
+                            session=agent_session, run_response=run_response
+                        )
                     except Exception as e:
                         log_warning(f"Error in session summary creation: {str(e)}")
 
@@ -4061,7 +4083,9 @@ async def _acontinue_run_stream(
                             store_events=agent.store_events,
                         )
                     try:
-                        await agent.session_summary_manager.acreate_session_summary(session=agent_session)
+                        await agent.session_summary_manager.acreate_session_summary(
+                            session=agent_session, run_response=run_response
+                        )
                     except Exception as e:
                         log_warning(f"Error in session summary creation: {str(e)}")
                     if stream_events:
