@@ -3,7 +3,7 @@ from typing import Any, List, Optional, Union
 
 from agno.agent import Agent, RemoteAgent
 from agno.media import Audio, File, Image, Video
-from agno.os.interfaces.discord.processing import MAX_ATTACHMENT_BYTES, run_entity, strip_mention
+from agno.os.interfaces.discord.processing import MAX_ATTACHMENT_BYTES, run_entity, run_entity_stream, strip_mention
 from agno.team import RemoteTeam, Team
 from agno.utils.log import log_error, log_info, log_warning
 from agno.workflow import RemoteWorkflow, Workflow
@@ -19,9 +19,14 @@ except ImportError:
 class GatewayReplier:
     def __init__(self, channel: Any):
         self._channel = channel
+        self._initial_message: Any = None
 
     async def send_initial_response(self, text: str) -> None:
-        await self._channel.send(text)
+        self._initial_message = await self._channel.send(text)
+
+    async def edit_response(self, text: str) -> None:
+        if self._initial_message is not None:
+            await self._initial_message.edit(content=text)
 
     async def send_followup(self, text: str) -> None:
         await self._channel.send(text)
@@ -36,6 +41,7 @@ def create_gateway_client(
     agent: Optional[Union[Agent, RemoteAgent]] = None,
     team: Optional[Union[Team, RemoteTeam]] = None,
     workflow: Optional[Union[Workflow, RemoteWorkflow]] = None,
+    stream: bool = False,
     reply_in_thread: bool = True,
     show_reasoning: bool = True,
     max_message_chars: int = 1900,
@@ -150,22 +156,40 @@ def create_gateway_client(
                 files_list.append(File(content=content_bytes, filename=attachment.filename))
 
         # 8. Process with typing indicator
+        # Streaming is only supported for local Agent/Team (not Workflow or Remote entities)
+        use_stream = stream and (agent or team) and not isinstance(entity, (RemoteAgent, RemoteTeam))
+
         async with channel.typing():
             replier = GatewayReplier(channel=channel)
             try:
-                await run_entity(
-                    entity=entity,  # type: ignore[arg-type]
-                    message_text=text,
-                    user_id=user_id,
-                    session_id=session_id,
-                    replier=replier,
-                    show_reasoning=show_reasoning,
-                    max_message_chars=max_message_chars,
-                    images=images or None,
-                    files=files_list or None,
-                    audio=audio_list or None,
-                    videos=videos or None,
-                )
+                if use_stream:
+                    await run_entity_stream(
+                        entity=entity,  # type: ignore[arg-type]
+                        message_text=text,
+                        user_id=user_id,
+                        session_id=session_id,
+                        replier=replier,
+                        show_reasoning=show_reasoning,
+                        max_message_chars=max_message_chars,
+                        images=images or None,
+                        files=files_list or None,
+                        audio=audio_list or None,
+                        videos=videos or None,
+                    )
+                else:
+                    await run_entity(
+                        entity=entity,  # type: ignore[arg-type]
+                        message_text=text,
+                        user_id=user_id,
+                        session_id=session_id,
+                        replier=replier,
+                        show_reasoning=show_reasoning,
+                        max_message_chars=max_message_chars,
+                        images=images or None,
+                        files=files_list or None,
+                        audio=audio_list or None,
+                        videos=videos or None,
+                    )
             except Exception as e:
                 log_error(f"Error processing Discord message: {e}")
                 try:

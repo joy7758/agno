@@ -44,6 +44,9 @@ class Discord(BaseInterface):
         max_message_chars: int = 1900,
         allowed_guild_ids: Optional[List[str]] = None,
         allowed_channel_ids: Optional[List[str]] = None,
+        # Streaming options — progressively edit the response message as content arrives.
+        # Only works for Agent and Team (not Workflow or Remote entities).
+        stream: bool = False,
         # Gateway options
         discord_bot_token: Optional[str] = None,
         reply_in_thread: bool = True,
@@ -53,6 +56,7 @@ class Discord(BaseInterface):
         self.workflow = workflow
         self.prefix = prefix
         self.tags = tags or ["Discord"]
+        self.stream = stream
         self.show_reasoning = show_reasoning
         self.max_message_chars = max_message_chars
         self.allowed_guild_ids = allowed_guild_ids
@@ -82,6 +86,7 @@ class Discord(BaseInterface):
             agent=agent,
             team=team,
             workflow=workflow,
+            stream=stream,
             reply_in_thread=reply_in_thread,
             show_reasoning=show_reasoning,
             max_message_chars=max_message_chars,
@@ -98,6 +103,7 @@ class Discord(BaseInterface):
             agent=self.agent,
             team=self.team,
             workflow=self.workflow,
+            stream=self.stream,
             show_reasoning=self.show_reasoning,
             max_message_chars=self.max_message_chars,
             allowed_guild_ids=self.allowed_guild_ids,

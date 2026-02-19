@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from agno.agent import Agent, RemoteAgent
 from agno.media import Audio, File, Image, Video
-from agno.os.interfaces.discord.processing import MAX_ATTACHMENT_BYTES, run_entity
+from agno.os.interfaces.discord.processing import MAX_ATTACHMENT_BYTES, run_entity, run_entity_stream
 from agno.os.interfaces.discord.security import verify_discord_signature
 from agno.team import RemoteTeam, Team
 from agno.utils.log import log_error, log_warning
@@ -82,6 +82,7 @@ def attach_routes(
     agent: Optional[Union[Agent, RemoteAgent]] = None,
     team: Optional[Union[Team, RemoteTeam]] = None,
     workflow: Optional[Union[Workflow, RemoteWorkflow]] = None,
+    stream: bool = False,
     show_reasoning: bool = True,
     max_message_chars: int = 1900,
     allowed_guild_ids: Optional[List[str]] = None,
@@ -179,6 +180,9 @@ def attach_routes(
             self._token = interaction_token
 
         async def send_initial_response(self, text: str) -> None:
+            await _edit_original(self._app_id, self._token, text)
+
+        async def edit_response(self, text: str) -> None:
             await _edit_original(self._app_id, self._token, text)
 
         async def send_followup(self, text: str) -> None:
@@ -305,19 +309,37 @@ def attach_routes(
                 interaction_token=interaction_token,
             )
 
-            await run_entity(
-                entity=entity,  # type: ignore[arg-type]
-                message_text=message_text,
-                user_id=user_id,
-                session_id=session_id,
-                replier=replier,
-                show_reasoning=show_reasoning,
-                max_message_chars=max_message_chars,
-                images=images or None,
-                files=files or None,
-                audio=audio_list or None,
-                videos=videos or None,
-            )
+            # Streaming is only supported for local Agent/Team (not Workflow or Remote entities)
+            use_stream = stream and (agent or team) and not isinstance(entity, (RemoteAgent, RemoteTeam))
+
+            if use_stream:
+                await run_entity_stream(
+                    entity=entity,  # type: ignore[arg-type]
+                    message_text=message_text,
+                    user_id=user_id,
+                    session_id=session_id,
+                    replier=replier,
+                    show_reasoning=show_reasoning,
+                    max_message_chars=max_message_chars,
+                    images=images or None,
+                    files=files or None,
+                    audio=audio_list or None,
+                    videos=videos or None,
+                )
+            else:
+                await run_entity(
+                    entity=entity,  # type: ignore[arg-type]
+                    message_text=message_text,
+                    user_id=user_id,
+                    session_id=session_id,
+                    replier=replier,
+                    show_reasoning=show_reasoning,
+                    max_message_chars=max_message_chars,
+                    images=images or None,
+                    files=files or None,
+                    audio=audio_list or None,
+                    videos=videos or None,
+                )
 
         except Exception as e:
             log_error(f"Error processing Discord command: {e}")

@@ -1,15 +1,21 @@
 import re
-from typing import Any, List, Optional, Protocol, Union
+import time
+from typing import Any, AsyncIterator, List, Optional, Protocol, Union
 
 from agno.agent import Agent, RemoteAgent
 from agno.media import Audio, File, Image, Video
+from agno.run.agent import RunCompletedEvent, RunContentEvent, RunOutput
 from agno.team import RemoteTeam, Team
-from agno.utils.log import log_error
+from agno.utils.log import log_error, log_warning
 from agno.utils.message import get_text_from_message
 from agno.workflow import RemoteWorkflow, Workflow
 
 # Discord enforces a 25 MB upload limit per attachment
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+
+# Minimum seconds between message edits during streaming to avoid Discord rate limits.
+# Discord allows ~5 edits per 5 seconds per channel; 1.0s is a safe default.
+DC_STREAM_EDIT_INTERVAL = 1.0
 
 
 # Abstraction over Discord's two transport mechanisms.  WebhookReplier (router.py)
@@ -18,6 +24,8 @@ MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 # doesn't need to know which transport is in use.
 class Replier(Protocol):
     async def send_initial_response(self, text: str) -> None: ...
+
+    async def edit_response(self, text: str) -> None: ...
 
     async def send_followup(self, text: str) -> None: ...
 
@@ -113,6 +121,109 @@ async def run_entity(
     # (e.g. DALL-E images, ElevenLabs audio).  Each media item is sent as a
     # separate Discord file attachment.  A single failed upload should not block
     # the others, so errors are logged and swallowed.
+    await _send_response_media(response, replier)
+
+
+async def run_entity_stream(
+    entity: Union[Agent, RemoteAgent, Team, RemoteTeam],
+    message_text: str,
+    user_id: str,
+    session_id: str,
+    replier: Replier,
+    show_reasoning: bool = True,
+    max_message_chars: int = 1900,
+    images: Optional[List[Image]] = None,
+    files: Optional[List[File]] = None,
+    audio: Optional[List[Audio]] = None,
+    videos: Optional[List[Video]] = None,
+) -> None:
+    """Run an agent/team with streaming and progressively update the Discord message.
+
+    Sends an initial message with the first chunk, then edits it as more content
+    arrives.  Edits are throttled to DC_STREAM_EDIT_INTERVAL to stay within
+    Discord's rate limits.  Once the stream completes, a final edit ensures the
+    full response is shown.
+
+    Streaming is only supported for Agent and Team (not Workflow or Remote entities).
+    """
+    event_stream: AsyncIterator[Any] = entity.arun(  # type: ignore
+        message_text,
+        stream=True,
+        yield_run_output=True,
+        user_id=user_id,
+        session_id=session_id,
+        images=images or None,
+        files=files or None,
+        audio=audio or None,
+        videos=videos or None,
+    )
+
+    sent_initial = False
+    accumulated_content = ""
+    last_edit_time = 0.0
+    final_run_output: Optional[RunOutput] = None
+
+    async for event in event_stream:
+        # Capture the final RunOutput for media extraction
+        if isinstance(event, RunOutput):
+            final_run_output = event
+            continue
+
+        if isinstance(event, RunContentEvent) and event.content:
+            accumulated_content += str(event.content)
+            now = time.monotonic()
+            if now - last_edit_time < DC_STREAM_EDIT_INTERVAL:
+                continue
+
+            # Truncate to Discord's limit for display
+            display_text = accumulated_content[:max_message_chars]
+            try:
+                if not sent_initial:
+                    await replier.send_initial_response(display_text)
+                    sent_initial = True
+                else:
+                    await replier.edit_response(display_text)
+                last_edit_time = now
+            except Exception as e:
+                log_warning(f"Stream edit failed (will retry on next chunk): {e}")
+
+        elif isinstance(event, RunCompletedEvent):
+            if event.content:
+                accumulated_content = str(event.content)
+
+    # Final edit with the complete content
+    if accumulated_content:
+        batches = split_message(accumulated_content, max_message_chars)
+        try:
+            if not sent_initial:
+                await replier.send_initial_response(batches[0])
+            else:
+                await replier.edit_response(batches[0])
+        except Exception as e:
+            log_warning(f"Final stream edit failed: {e}")
+
+        # If the response overflows into multiple parts, send the rest as follow-ups
+        for batch in batches[1:]:
+            await replier.send_followup(batch)
+
+    elif not sent_initial:
+        await replier.send_initial_response("(empty response)")
+
+    # Send reasoning content if available
+    if final_run_output and show_reasoning:
+        reasoning = getattr(final_run_output, "reasoning_content", None)
+        if reasoning:
+            reasoning_text = f"*{reasoning}*"
+            for batch in split_message(reasoning_text, max_message_chars):
+                await replier.send_followup(batch)
+
+    # Send media attachments from the final response
+    if final_run_output:
+        await _send_response_media(final_run_output, replier)
+
+
+async def _send_response_media(response: Any, replier: Replier) -> None:
+    """Upload output media from a response via the replier."""
     media_attrs = [
         ("images", "image.png"),
         ("files", "file"),
