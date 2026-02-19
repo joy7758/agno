@@ -227,6 +227,115 @@ class TestPostHookGuardrailInBackground:
         assert len(bt.tasks) == 1
 
 
+class TestMixedHookOrdering:
+    """Tests for hook ordering: non-guardrail hooks should NOT be queued if a later guardrail rejects."""
+
+    def test_plain_hook_before_guardrail_not_queued_on_rejection(self):
+        """When a plain hook appears before a guardrail, the buffer-and-flush
+        pattern ensures the plain hook is NOT queued if the guardrail rejects.
+        """
+        agent = _make_agent(run_hooks_in_background=True)
+        bt = _make_background_tasks()
+        guardrail = BlockingGuardrail()
+        guardrail_hooks = normalize_pre_hooks([guardrail], async_mode=False)
+
+        def plain_hook(**kwargs):
+            pass
+
+        # plain_hook BEFORE guardrail
+        hooks = [plain_hook] + guardrail_hooks
+
+        with pytest.raises(InputCheckError, match="blocked by guardrail"):
+            list(
+                execute_pre_hooks(
+                    agent=agent,
+                    hooks=hooks,
+                    run_response=MagicMock(),
+                    run_input=_make_run_input(),
+                    session=_make_session(),
+                    run_context=_make_run_context(),
+                    background_tasks=bt,
+                )
+            )
+        assert len(bt.tasks) == 0
+
+    def test_plain_hook_after_guardrail_not_queued_on_rejection(self):
+        """When a guardrail appears first, the exception prevents later hooks from queueing."""
+        agent = _make_agent(run_hooks_in_background=True)
+        bt = _make_background_tasks()
+        guardrail = BlockingGuardrail()
+        guardrail_hooks = normalize_pre_hooks([guardrail], async_mode=False)
+
+        def plain_hook(**kwargs):
+            pass
+
+        # guardrail BEFORE plain_hook — this ordering is safe
+        hooks = guardrail_hooks + [plain_hook]
+
+        with pytest.raises(InputCheckError, match="blocked by guardrail"):
+            list(
+                execute_pre_hooks(
+                    agent=agent,
+                    hooks=hooks,
+                    run_response=MagicMock(),
+                    run_input=_make_run_input(),
+                    session=_make_session(),
+                    run_context=_make_run_context(),
+                    background_tasks=bt,
+                )
+            )
+        assert len(bt.tasks) == 0
+
+    @pytest.mark.asyncio
+    async def test_async_plain_hook_before_guardrail_not_queued_on_rejection(self):
+        agent = _make_agent(run_hooks_in_background=True)
+        bt = _make_background_tasks()
+        guardrail = BlockingGuardrail()
+        guardrail_hooks = normalize_pre_hooks([guardrail], async_mode=True)
+
+        def plain_hook(**kwargs):
+            pass
+
+        hooks = [plain_hook] + guardrail_hooks
+
+        with pytest.raises(InputCheckError, match="blocked by guardrail"):
+            async for _ in aexecute_pre_hooks(
+                agent=agent,
+                hooks=hooks,
+                run_response=MagicMock(),
+                run_input=_make_run_input(),
+                session=_make_session(),
+                run_context=_make_run_context(),
+                background_tasks=bt,
+            ):
+                pass
+        assert len(bt.tasks) == 0
+
+    def test_post_hook_plain_before_guardrail_not_queued_on_rejection(self):
+        agent = _make_agent(run_hooks_in_background=True)
+        bt = _make_background_tasks()
+        guardrail = OutputBlockingGuardrail()
+
+        def plain_hook(**kwargs):
+            pass
+
+        # plain_hook BEFORE guardrail
+        hooks = [plain_hook, guardrail.check]
+
+        with pytest.raises(OutputCheckError, match="blocked output"):
+            list(
+                execute_post_hooks(
+                    agent=agent,
+                    hooks=hooks,
+                    run_output=MagicMock(),
+                    session=_make_session(),
+                    run_context=_make_run_context(),
+                    background_tasks=bt,
+                )
+            )
+        assert len(bt.tasks) == 0
+
+
 class TestDebugModeFalse:
     def test_debug_mode_false_not_overridden_by_agent(self):
         agent = _make_agent()
