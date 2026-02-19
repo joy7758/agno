@@ -332,7 +332,9 @@ def _run_tasks(
             if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
                 from agno.team import _hooks
 
-                return _hooks.handle_team_run_paused(team, run_response=run_response, session=session)
+                return _hooks.handle_team_run_paused(
+                    team, run_response=run_response, session=session, run_context=run_context
+                )
 
             # Check termination conditions
             task_list = load_task_list(run_context.session_state)
@@ -1001,7 +1003,9 @@ def _run(
                 if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
                     from agno.team import _hooks
 
-                    return _hooks.handle_team_run_paused(team, run_response=run_response, session=session)
+                    return _hooks.handle_team_run_paused(
+                        team, run_response=run_response, session=session, run_context=run_context
+                    )
 
                 # 8. Store media if enabled
                 if team.store_media:
@@ -1377,7 +1381,9 @@ def _run_stream(
                 if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
                     from agno.team import _hooks
 
-                    yield from _hooks.handle_team_run_paused_stream(team, run_response=run_response, session=session)
+                    yield from _hooks.handle_team_run_paused_stream(
+                        team, run_response=run_response, session=session, run_context=run_context
+                    )
                     if yield_run_output:
                         yield run_response
                     return
@@ -1949,7 +1955,9 @@ async def _arun_tasks(
             if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
                 from agno.team import _hooks
 
-                return await _hooks.ahandle_team_run_paused(team, run_response=run_response, session=team_session)
+                return await _hooks.ahandle_team_run_paused(
+                    team, run_response=run_response, session=team_session, run_context=run_context
+                )
 
             # Check termination conditions
             task_list = load_task_list(run_context.session_state)
@@ -2679,7 +2687,9 @@ async def _arun(
                 if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
                     from agno.team import _hooks
 
-                    return await _hooks.ahandle_team_run_paused(team, run_response=run_response, session=team_session)
+                    return await _hooks.ahandle_team_run_paused(
+                        team, run_response=run_response, session=team_session, run_context=run_context
+                    )
 
                 # 8. Store media if enabled
                 if team.store_media:
@@ -3164,7 +3174,7 @@ async def _arun_stream(
                     from agno.team import _hooks
 
                     async for item in _hooks.ahandle_team_run_paused_stream(  # type: ignore[assignment]
-                        team, run_response=run_response, session=team_session
+                        team, run_response=run_response, session=team_session, run_context=run_context
                     ):
                         yield item
                     if yield_run_output:
@@ -3598,7 +3608,12 @@ def _update_team_media(team: "Team", run_response: Union[TeamRunOutput, RunOutpu
 # ---------------------------------------------------------------------------
 
 
-def _cleanup_and_store(team: "Team", run_response: TeamRunOutput, session: TeamSession) -> None:
+def _cleanup_and_store(
+    team: "Team",
+    run_response: TeamRunOutput,
+    session: TeamSession,
+    run_context: Optional[RunContext] = None,
+) -> None:
     #  Scrub the stored run based on storage flags
     from agno.team._session import update_session_metrics
 
@@ -3608,17 +3623,33 @@ def _cleanup_and_store(team: "Team", run_response: TeamRunOutput, session: TeamS
     if run_response.metrics:
         run_response.metrics.stop_timer()
 
+    # Update run_response.session_state before saving
+    if run_context is not None and run_context.session_state is not None:
+        run_response.session_state = run_context.session_state
+
     # Add RunOutput to Team Session
     session.upsert_run(run_response=run_response)
 
     # Calculate session metrics
     update_session_metrics(team, session=session, run_response=run_response)
+
+    # Update session state before saving the session
+    if run_context is not None and run_context.session_state is not None:
+        if session.session_data is not None:
+            session.session_data["session_state"] = run_context.session_state
+        else:
+            session.session_data = {"session_state": run_context.session_state}
 
     # Save session to memory
     team.save_session(session=session)
 
 
-async def _acleanup_and_store(team: "Team", run_response: TeamRunOutput, session: TeamSession) -> None:
+async def _acleanup_and_store(
+    team: "Team",
+    run_response: TeamRunOutput,
+    session: TeamSession,
+    run_context: Optional[RunContext] = None,
+) -> None:
     #  Scrub the stored run based on storage flags
     from agno.team._session import update_session_metrics
 
@@ -3628,11 +3659,22 @@ async def _acleanup_and_store(team: "Team", run_response: TeamRunOutput, session
     if run_response.metrics:
         run_response.metrics.stop_timer()
 
+    # Update run_response.session_state before saving
+    if run_context is not None and run_context.session_state is not None:
+        run_response.session_state = run_context.session_state
+
     # Add RunOutput to Team Session
     session.upsert_run(run_response=run_response)
 
     # Calculate session metrics
     update_session_metrics(team, session=session, run_response=run_response)
+
+    # Update session state before saving the session
+    if run_context is not None and run_context.session_state is not None:
+        if session.session_data is not None:
+            session.session_data["session_state"] = run_context.session_state
+        else:
+            session.session_data = {"session_state": run_context.session_state}
 
     # Save session to memory
     await team.asave_session(session=session)
@@ -4389,9 +4431,13 @@ def continue_run_dispatch(
             from agno.team import _hooks
 
             if opts.stream:
-                return _hooks.handle_team_run_paused_stream(team, run_response=run_response, session=team_session)  # type: ignore
+                return _hooks.handle_team_run_paused_stream(
+                    team, run_response=run_response, session=team_session, run_context=run_context
+                )  # type: ignore
             else:
-                return _hooks.handle_team_run_paused(team, run_response=run_response, session=team_session)
+                return _hooks.handle_team_run_paused(
+                    team, run_response=run_response, session=team_session, run_context=run_context
+                )
 
     # Handle team-level tool resolution
     if has_team_level:
@@ -4405,9 +4451,13 @@ def continue_run_dispatch(
             from agno.team import _hooks
 
             if opts.stream:
-                return _hooks.handle_team_run_paused_stream(team, run_response=run_response, session=team_session)  # type: ignore
+                return _hooks.handle_team_run_paused_stream(
+                    team, run_response=run_response, session=team_session, run_context=run_context
+                )  # type: ignore
             else:
-                return _hooks.handle_team_run_paused(team, run_response=run_response, session=team_session)
+                return _hooks.handle_team_run_paused(
+                    team, run_response=run_response, session=team_session, run_context=run_context
+                )
 
         response_format = get_response_format(team, run_context=run_context) if team.parser_model is None else None
         team.model = cast(Model, team.model)
@@ -4596,7 +4646,9 @@ def _continue_run(
                 if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
                     from agno.team import _hooks
 
-                    return _hooks.handle_team_run_paused(team, run_response=run_response, session=session)
+                    return _hooks.handle_team_run_paused(
+                        team, run_response=run_response, session=session, run_context=run_context
+                    )
 
                 # Convert to structured format
                 _convert_response_to_structured_format(team, run_response=run_response, run_context=run_context)
@@ -4798,7 +4850,9 @@ def _continue_run_stream(
                 if run_response.requirements and any(not req.is_resolved() for req in run_response.requirements):
                     from agno.team import _hooks
 
-                    yield from _hooks.handle_team_run_paused_stream(team, run_response=run_response, session=session)
+                    yield from _hooks.handle_team_run_paused_stream(
+                        team, run_response=run_response, session=session, run_context=run_context
+                    )
                     if yield_run_output:
                         yield run_response
                     return
@@ -5170,7 +5224,7 @@ async def _acontinue_run(
                         from agno.team import _hooks
 
                         return await _hooks.ahandle_team_run_paused(
-                            team, run_response=run_response, session=team_session
+                            team, run_response=run_response, session=team_session, run_context=run_context
                         )
 
                 # Handle team-level tool resolution
@@ -5185,7 +5239,7 @@ async def _acontinue_run(
                         from agno.team import _hooks
 
                         return await _hooks.ahandle_team_run_paused(
-                            team, run_response=run_response, session=team_session
+                            team, run_response=run_response, session=team_session, run_context=run_context
                         )
 
                     team.model = cast(Model, team.model)
@@ -5243,7 +5297,7 @@ async def _acontinue_run(
                         from agno.team import _hooks
 
                         return await _hooks.ahandle_team_run_paused(
-                            team, run_response=run_response, session=team_session
+                            team, run_response=run_response, session=team_session, run_context=run_context
                         )
 
                     _convert_response_to_structured_format(team, run_response=run_response, run_context=run_context)
@@ -5456,7 +5510,7 @@ async def _acontinue_run_stream(
                         from agno.team import _hooks
 
                         async for item in _hooks.ahandle_team_run_paused_stream(
-                            team, run_response=run_response, session=team_session
+                            team, run_response=run_response, session=team_session, run_context=run_context
                         ):
                             yield item
                         if yield_run_output:
@@ -5474,7 +5528,7 @@ async def _acontinue_run_stream(
                         from agno.team import _hooks
 
                         async for item in _hooks.ahandle_team_run_paused_stream(
-                            team, run_response=run_response, session=team_session
+                            team, run_response=run_response, session=team_session, run_context=run_context
                         ):
                             yield item
                         if yield_run_output:
@@ -5580,7 +5634,7 @@ async def _acontinue_run_stream(
                         from agno.team import _hooks
 
                         async for item in _hooks.ahandle_team_run_paused_stream(
-                            team, run_response=run_response, session=team_session
+                            team, run_response=run_response, session=team_session, run_context=run_context
                         ):
                             yield item
                         if yield_run_output:
