@@ -190,7 +190,7 @@ def _run_tasks(
     """
     from agno.team._hooks import _execute_post_hooks, _execute_pre_hooks
     from agno.team._init import _disconnect_connectable_tools
-    from agno.team._managers import _start_memory_future
+    from agno.team._managers import _start_learning_future, _start_memory_future
     from agno.team._messages import _get_run_messages
     from agno.team._response import (
         _convert_response_to_structured_format,
@@ -203,6 +203,7 @@ def _run_tasks(
 
     log_debug(f"Team Task Run Start: {run_response.run_id}", center=True)
     memory_future = None
+    learning_future = None
 
     try:
         run_input = cast(TeamRunInput, run_response.input)
@@ -269,12 +270,19 @@ def _run_tasks(
         if len(run_messages.messages) == 0:
             log_error("No messages to be sent to the model.")
 
-        # 4. Start memory creation in background
+        # 4. Start memory and learning creation in background
         memory_future = _start_memory_future(
             team,
             run_messages=run_messages,
             user_id=user_id,
             existing_future=memory_future,
+        )
+        learning_future = _start_learning_future(
+            team,
+            run_messages=run_messages,
+            session=session,
+            user_id=user_id,
+            existing_future=learning_future,
         )
 
         raise_if_cancelled(run_response.run_id)  # type: ignore
@@ -382,8 +390,8 @@ def _run_tasks(
 
         raise_if_cancelled(run_response.run_id)  # type: ignore
 
-        # Wait for background memory creation
-        wait_for_open_threads(memory_future=memory_future)  # type: ignore
+        # Wait for background memory and learning creation
+        wait_for_open_threads(memory_future=memory_future, learning_future=learning_future)  # type: ignore
 
         raise_if_cancelled(run_response.run_id)  # type: ignore
 
@@ -449,8 +457,14 @@ def _run_tasks(
         return run_response
 
     finally:
-        if memory_future is not None and not memory_future.done():
-            memory_future.cancel()
+        # Cancel background futures on error
+        for future in (memory_future, learning_future):
+            if future is not None and not future.done():
+                future.cancel()
+                try:
+                    future.result(timeout=0)
+                except Exception:
+                    pass
         _disconnect_connectable_tools(team)
         cleanup_run(run_response.run_id)  # type: ignore
 
@@ -486,6 +500,7 @@ def _run_tasks_stream(
     from agno.team._response import (
         _convert_response_to_structured_format,
         _handle_model_response_stream,
+        generate_response_with_output_model_stream,
         handle_reasoning_stream,
     )
     from agno.team._telemetry import log_team_telemetry
@@ -641,19 +656,53 @@ def _run_tasks_stream(
             # Update run_messages with accumulated messages for streaming
             run_messages.messages = accumulated_messages
 
-            for event in _handle_model_response_stream(
-                team,
-                session=session,
-                run_response=run_response,
-                run_messages=run_messages,
-                tools=_tools,
-                response_format=response_format,
-                stream_events=stream_events,
-                session_state=run_context.session_state,
-                run_context=run_context,
-            ):
-                raise_if_cancelled(run_response.run_id)  # type: ignore
-                yield event
+            if team.output_model is None:
+                for event in _handle_model_response_stream(
+                    team,
+                    session=session,
+                    run_response=run_response,
+                    run_messages=run_messages,
+                    tools=_tools,
+                    response_format=response_format,
+                    stream_events=stream_events,
+                    session_state=run_context.session_state,
+                    run_context=run_context,
+                ):
+                    raise_if_cancelled(run_response.run_id)  # type: ignore
+                    yield event
+            else:
+                for event in _handle_model_response_stream(
+                    team,
+                    session=session,
+                    run_response=run_response,
+                    run_messages=run_messages,
+                    tools=_tools,
+                    response_format=response_format,
+                    stream_events=stream_events,
+                    session_state=run_context.session_state,
+                    run_context=run_context,
+                ):
+                    raise_if_cancelled(run_response.run_id)  # type: ignore
+                    from agno.run.team import IntermediateRunContentEvent, RunContentEvent
+
+                    if isinstance(event, RunContentEvent):
+                        if stream_events:
+                            yield IntermediateRunContentEvent(
+                                content=event.content,
+                                content_type=event.content_type,
+                            )
+                    else:
+                        yield event
+
+                for event in generate_response_with_output_model_stream(
+                    team,
+                    session=session,
+                    run_response=run_response,
+                    run_messages=run_messages,
+                    stream_events=stream_events,
+                ):
+                    raise_if_cancelled(run_response.run_id)  # type: ignore
+                    yield event
 
             raise_if_cancelled(run_response.run_id)  # type: ignore
 
@@ -842,6 +891,8 @@ def _run_tasks_stream(
 
     except KeyboardInterrupt:
         run_response = cast(TeamRunOutput, run_response)
+        run_response.status = RunStatus.cancelled
+        run_response.content = "Operation cancelled by user"
         try:
             _cleanup_and_store(team, run_response=run_response, session=session)
         except Exception:
@@ -1877,7 +1928,7 @@ async def _arun_tasks(
     """
     from agno.team._hooks import _aexecute_post_hooks, _aexecute_pre_hooks
     from agno.team._init import _disconnect_connectable_tools, _disconnect_mcp_tools
-    from agno.team._managers import _astart_memory_task
+    from agno.team._managers import _astart_learning_task, _astart_memory_task
     from agno.team._messages import _aget_run_messages
     from agno.team._response import (
         _convert_response_to_structured_format,
@@ -1890,6 +1941,7 @@ async def _arun_tasks(
 
     log_debug(f"Team Task Run Start: {run_response.run_id}", center=True)
     memory_task = None
+    learning_task = None
     team_session: Optional[TeamSession] = None
 
     try:
@@ -1969,12 +2021,19 @@ async def _arun_tasks(
             **kwargs,
         )
 
-        # 4. Start memory creation in background
+        # 4. Start memory and learning creation in background
         memory_task = await _astart_memory_task(
             team,
             run_messages=run_messages,
             user_id=user_id,
             existing_task=memory_task,
+        )
+        learning_task = await _astart_learning_task(
+            team,
+            run_messages=run_messages,
+            session=team_session,
+            user_id=user_id,
+            existing_task=learning_task,
         )
 
         await araise_if_cancelled(run_response.run_id)  # type: ignore
@@ -2080,8 +2139,8 @@ async def _arun_tasks(
 
         await araise_if_cancelled(run_response.run_id)  # type: ignore
 
-        # Wait for background memory creation
-        await await_for_open_threads(memory_task=memory_task)
+        # Wait for background memory and learning creation
+        await await_for_open_threads(memory_task=memory_task, learning_task=learning_task)
 
         await araise_if_cancelled(run_response.run_id)  # type: ignore
 
@@ -2152,12 +2211,14 @@ async def _arun_tasks(
     finally:
         _disconnect_connectable_tools(team)
         await _disconnect_mcp_tools(team)
-        if memory_task is not None and not memory_task.done():
-            memory_task.cancel()
-            try:
-                await memory_task
-            except asyncio.CancelledError:
-                pass
+        # Cancel background tasks on error
+        for task in (memory_task, learning_task):
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
         await acleanup_run(run_response.run_id)  # type: ignore
 
     return run_response
@@ -2192,6 +2253,7 @@ async def _arun_tasks_stream(
     from agno.team._response import (
         _ahandle_model_response_stream,
         _convert_response_to_structured_format,
+        agenerate_response_with_output_model_stream,
         ahandle_reasoning_stream,
     )
     from agno.team._telemetry import alog_team_telemetry
@@ -2361,19 +2423,53 @@ async def _arun_tasks_stream(
             # Update run_messages with accumulated messages for streaming
             run_messages.messages = accumulated_messages
 
-            async for event in _ahandle_model_response_stream(
-                team,
-                session=team_session,
-                run_response=run_response,
-                run_messages=run_messages,
-                tools=_tools,
-                response_format=response_format,
-                stream_events=stream_events,
-                session_state=run_context.session_state,
-                run_context=run_context,
-            ):
-                await araise_if_cancelled(run_response.run_id)  # type: ignore
-                yield event
+            if team.output_model is None:
+                async for event in _ahandle_model_response_stream(
+                    team,
+                    session=team_session,
+                    run_response=run_response,
+                    run_messages=run_messages,
+                    tools=_tools,
+                    response_format=response_format,
+                    stream_events=stream_events,
+                    session_state=run_context.session_state,
+                    run_context=run_context,
+                ):
+                    await araise_if_cancelled(run_response.run_id)  # type: ignore
+                    yield event
+            else:
+                async for event in _ahandle_model_response_stream(
+                    team,
+                    session=team_session,
+                    run_response=run_response,
+                    run_messages=run_messages,
+                    tools=_tools,
+                    response_format=response_format,
+                    stream_events=stream_events,
+                    session_state=run_context.session_state,
+                    run_context=run_context,
+                ):
+                    await araise_if_cancelled(run_response.run_id)  # type: ignore
+                    from agno.run.team import IntermediateRunContentEvent, RunContentEvent
+
+                    if isinstance(event, RunContentEvent):
+                        if stream_events:
+                            yield IntermediateRunContentEvent(
+                                content=event.content,
+                                content_type=event.content_type,
+                            )
+                    else:
+                        yield event
+
+                async for event in agenerate_response_with_output_model_stream(
+                    team,
+                    session=team_session,
+                    run_response=run_response,
+                    run_messages=run_messages,
+                    stream_events=stream_events,
+                ):
+                    await araise_if_cancelled(run_response.run_id)  # type: ignore
+                    yield event
 
             await araise_if_cancelled(run_response.run_id)  # type: ignore
 
@@ -2565,6 +2661,8 @@ async def _arun_tasks_stream(
 
     except (KeyboardInterrupt, asyncio.CancelledError):
         run_response = cast(TeamRunOutput, run_response)
+        run_response.status = RunStatus.cancelled
+        run_response.content = "Operation cancelled by user"
         try:
             if team_session is not None:
                 await _acleanup_and_store(team, run_response=run_response, session=team_session)
