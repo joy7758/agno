@@ -49,6 +49,16 @@ agent_os = AgentOS(
             agent=streaming_agent,
             streaming=True,
             reply_to_mentions_only=True,
+            initial_buffer_size=1,
+            loading_messages=[
+                "Thinking...",
+                "Searching the web...",
+                "Working on it...",
+            ],
+            suggested_prompts=[
+                {"title": "Help", "message": "What can you help me with?"},
+                {"title": "Search", "message": "Search the web for the latest news"},
+            ],
         )
     ],
 )
