@@ -277,6 +277,7 @@ class TestCreateApprovalFromPause:
         data = db.create_approval.call_args[0][0]
         assert result == data["id"]
 
+
 # =============================================================================
 # acreate_approval_from_pause (async)
 # =============================================================================
@@ -320,6 +321,7 @@ class TestAsyncCreateApprovalFromPause:
         assert len(result) > 0
         data = db.create_approval.call_args[0][0]
         assert result == data["id"]
+
 
 # =============================================================================
 # create_audit_approval (sync)

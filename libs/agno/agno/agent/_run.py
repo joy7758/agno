@@ -2686,10 +2686,7 @@ def continue_run_dispatch(
         # The run is continued from a provided run_response. This contains the updated tools.
         input = run_response.messages or []
     elif run_id is not None:
-        # The run is continued from a run_id, one of requirements or updated_tool (deprecated) is required.
-        if updated_tools is None and requirements is None:
-            raise ValueError("To continue a run from a given run_id, the requirements parameter must be provided.")
-
+        # The run is continued from a run_id.
         runs = agent_session.runs or []
         run_response = next((r for r in runs if r.run_id == run_id), None)  # type: ignore
         if run_response is None:
@@ -2715,6 +2712,23 @@ def continue_run_dispatch(
                 run_response.tools = [updated_tools_map.get(tool.tool_call_id, tool) for tool in run_response.tools]
             else:
                 run_response.tools = updated_tools
+
+        # If no tools/requirements provided, check for resolved admin approval
+        elif run_response.tools:
+            from agno.run.approval import check_and_apply_approval_resolution
+
+            try:
+                # This will apply resolution_data to tools if approval is resolved
+                check_and_apply_approval_resolution(agent.db, run_id, run_response)
+            except RuntimeError:
+                # No resolved approval found - fall back to requiring tools/requirements
+                raise ValueError(
+                    "To continue a run from a given run_id, the requirements parameter must be provided "
+                    "(or resolve an admin approval first)."
+                )
+        else:
+            # No tools on the run_response either
+            raise ValueError("To continue a run from a given run_id, the requirements parameter must be provided.")
     else:
         raise ValueError("Either run_response or run_id must be provided.")
 
@@ -3495,12 +3509,7 @@ async def _acontinue_run(
                     # The run is continued from a provided run_response. This contains the updated tools.
                     input = run_response.messages or []
                 elif run_id is not None:
-                    # The run is continued from a run_id. This requires the updated tools to be passed.
-                    if updated_tools is None and requirements is None:
-                        raise ValueError(
-                            "Either updated tools or requirements are required to continue a run from a run_id."
-                        )
-
+                    # The run is continued from a run_id.
                     runs = agent_session.runs or []
                     run_response = next((r for r in runs if r.run_id == run_id), None)  # type: ignore
                     if run_response is None:
@@ -3523,6 +3532,25 @@ async def _acontinue_run(
                             ]
                         else:
                             run_response.tools = updated_tools
+
+                    # If no tools/requirements provided, check for resolved admin approval
+                    elif run_response.tools:
+                        from agno.run.approval import acheck_and_apply_approval_resolution
+
+                        try:
+                            # This will apply resolution_data to tools if approval is resolved
+                            await acheck_and_apply_approval_resolution(agent.db, run_id, run_response)
+                        except RuntimeError:
+                            # No resolved approval found - fall back to requiring tools/requirements
+                            raise ValueError(
+                                "To continue a run from a given run_id, the requirements parameter must be provided "
+                                "(or resolve an admin approval first)."
+                            )
+                    else:
+                        # No tools on the run_response either
+                        raise ValueError(
+                            "To continue a run from a given run_id, the requirements parameter must be provided."
+                        )
                 else:
                     raise ValueError("Either run_response or run_id must be provided.")
 
@@ -3835,12 +3863,7 @@ async def _acontinue_run_stream(
                     input = run_response.messages or []
 
                 elif run_id is not None:
-                    # The run is continued from a run_id. This requires the updated tools or requirements to be passed.
-                    if updated_tools is None and requirements is None:
-                        raise ValueError(
-                            "Either updated tools or requirements are required to continue a run from a run_id."
-                        )
-
+                    # The run is continued from a run_id.
                     runs = agent_session.runs or []
                     run_response = next((r for r in runs if r.run_id == run_id), None)  # type: ignore
                     if run_response is None:
@@ -3863,6 +3886,25 @@ async def _acontinue_run_stream(
                             ]
                         else:
                             run_response.tools = updated_tools
+
+                    # If no tools/requirements provided, check for resolved admin approval
+                    elif run_response.tools:
+                        from agno.run.approval import acheck_and_apply_approval_resolution
+
+                        try:
+                            # This will apply resolution_data to tools if approval is resolved
+                            await acheck_and_apply_approval_resolution(agent.db, run_id, run_response)
+                        except RuntimeError:
+                            # No resolved approval found - fall back to requiring tools/requirements
+                            raise ValueError(
+                                "To continue a run from a given run_id, the requirements parameter must be provided "
+                                "(or resolve an admin approval first)."
+                            )
+                    else:
+                        # No tools on the run_response either
+                        raise ValueError(
+                            "To continue a run from a given run_id, the requirements parameter must be provided."
+                        )
                 else:
                     raise ValueError("Either run_response or run_id must be provided.")
 
