@@ -243,8 +243,8 @@ def _execute_pre_hooks(
 
     all_args.update(kwargs)
 
-    # Check if background_tasks is available and ALL hooks should run in background
-    # Note: Pre-hooks running in background may not be able to modify run_input
+    # Global background mode: run guardrails synchronously, buffer everything else.
+    # See agent/_hooks.py execute_pre_hooks for full pattern explanation.
     if team._run_hooks_in_background is True and background_tasks is not None:
         pending_bg_hooks = []
         for hook in hooks:
@@ -343,8 +343,7 @@ async def _aexecute_pre_hooks(
 
     all_args.update(kwargs)
 
-    # Check if background_tasks is available and ALL hooks should run in background
-    # Note: Pre-hooks running in background may not be able to modify run_input
+    # Global background mode — see _execute_pre_hooks for pattern explanation.
     if team._run_hooks_in_background is True and background_tasks is not None:
         pending_bg_hooks = []
         for hook in hooks:
@@ -452,7 +451,7 @@ def _execute_post_hooks(
 
     all_args.update(kwargs)
 
-    # Check if background_tasks is available and ALL hooks should run in background
+    # Global background mode — see _execute_pre_hooks for pattern explanation.
     if team._run_hooks_in_background is True and background_tasks is not None:
         pending_bg_hooks = []
         for hook in hooks:
@@ -549,7 +548,7 @@ async def _aexecute_post_hooks(
 
     all_args.update(kwargs)
 
-    # Check if background_tasks is available and ALL hooks should run in background
+    # Global background mode — see _execute_pre_hooks for pattern explanation.
     if team._run_hooks_in_background is True and background_tasks is not None:
         pending_bg_hooks = []
         for hook in hooks:

@@ -71,8 +71,11 @@ def execute_pre_hooks(
 
     all_args.update(kwargs)
 
-    # Check if background_tasks is available and ALL hooks should run in background
-    # Note: Pre-hooks running in background may not be able to modify run_input
+    # Global background mode: run guardrails synchronously, buffer everything else.
+    # Guardrails MUST block so InputCheckError/OutputCheckError can propagate.
+    # Non-guardrail hooks are buffered and only queued after ALL guardrails pass —
+    # this prevents side-effects (logging, webhooks) from firing on rejected input.
+    # deepcopy runs AFTER the guardrail loop so mutations (e.g. PII masking) propagate.
     if agent._run_hooks_in_background is True and background_tasks is not None:
         pending_bg_hooks = []
         for hook in hooks:
@@ -87,7 +90,6 @@ def execute_pre_hooks(
                     log_exception(e)
             else:
                 pending_bg_hooks.append(hook)
-        # Copy args AFTER guardrails — captures any mutations (e.g. PII masking)
         bg_args = copy_args_for_background(all_args)
         for hook in pending_bg_hooks:
             filtered_args = filter_hook_args(hook, bg_args)
@@ -182,8 +184,7 @@ async def aexecute_pre_hooks(
 
     all_args.update(kwargs)
 
-    # Check if background_tasks is available and ALL hooks should run in background
-    # Note: Pre-hooks running in background may not be able to modify run_input
+    # Global background mode — see execute_pre_hooks for pattern explanation.
     if agent._run_hooks_in_background is True and background_tasks is not None:
         pending_bg_hooks = []
         for hook in hooks:
@@ -293,7 +294,7 @@ def execute_post_hooks(
 
     all_args.update(kwargs)
 
-    # Check if background_tasks is available and ALL hooks should run in background
+    # Global background mode — see execute_pre_hooks for pattern explanation.
     if agent._run_hooks_in_background is True and background_tasks is not None:
         pending_bg_hooks = []
         for hook in hooks:
@@ -396,7 +397,7 @@ async def aexecute_post_hooks(
 
     all_args.update(kwargs)
 
-    # Check if background_tasks is available and ALL hooks should run in background
+    # Global background mode — see execute_pre_hooks for pattern explanation.
     if agent._run_hooks_in_background is True and background_tasks is not None:
         pending_bg_hooks = []
         for hook in hooks:
