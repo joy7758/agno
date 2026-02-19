@@ -436,7 +436,6 @@ class Function(BaseModel):
                 del type_hints["audios"]
             if "files" in sig.parameters and "files" in type_hints:
                 del type_hints["files"]
-            # log_info(f"Type hints for {self.name}: {type_hints}")
 
             # Filter out return type and only process parameters
             excluded_params = [
@@ -450,6 +449,20 @@ class Function(BaseModel):
                 "audios",
                 "files",
             ]
+
+            # Also exclude parameters whose types are Agent or Team,
+            # even if the parameter name differs (e.g. my_agent: Agent). See issue #6344.
+            try:
+                from agno.agent.agent import Agent
+                from agno.team.team import Team
+
+                framework_types = (Agent, Team)
+                for param_name, hint in list(type_hints.items()):
+                    if isinstance(hint, type) and issubclass(hint, framework_types):
+                        del type_hints[param_name]
+                        excluded_params.append(param_name)
+            except Exception:
+                pass
             if self.requires_user_input and self.user_input_fields:
                 if len(self.user_input_fields) == 0:
                     excluded_params.extend(list(type_hints.keys()))
@@ -564,6 +577,22 @@ class Function(BaseModel):
         framework_params = {"agent", "team"}
         if framework_params & set(sig.parameters.keys()):
             return func
+
+        # Also skip validation when parameter types include Agent or Team,
+        # even if the parameter name differs (e.g. my_agent: Agent).
+        # validate_call uses get_type_hints() which fails to resolve types
+        # from Agent/Team class hierarchies (like BaseDb) in the user's module globals.
+        try:
+            hints = get_type_hints(func)
+            from agno.agent.agent import Agent
+            from agno.team.team import Team
+
+            framework_types = (Agent, Team)
+            for hint in hints.values():
+                if isinstance(hint, type) and issubclass(hint, framework_types):
+                    return func
+        except Exception:
+            pass
 
         # Wrap the callable with validate_call
         else:
