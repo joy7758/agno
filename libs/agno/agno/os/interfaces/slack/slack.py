@@ -26,7 +26,7 @@ class Slack(BaseInterface):
         signing_secret: Optional[str] = None,
         streaming: bool = False,
         loading_messages: Optional[List[str]] = None,
-        task_display_mode: Optional[str] = None,
+        task_display_mode: str = "plan",
         buffer_size: int = 256,
         initial_buffer_size: int = 1,
         suggested_prompts: Optional[List[Dict[str, str]]] = None,
