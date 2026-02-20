@@ -112,6 +112,9 @@ class Gemini(Model):
     thinking_level: Optional[str] = None  # "low", "high"
     request_params: Optional[Dict[str, Any]] = None
 
+    # Gemini returns cumulative token counts in each streaming chunk, so only collect on final chunk
+    collect_metrics_on_completion: bool = True
+
     # Client parameters
     credentials: Optional[Credentials] = None
     api_key: Optional[str] = None
@@ -1400,7 +1403,7 @@ class Gemini(Model):
                 model_response.citations = citations
 
             # Extract usage metadata if present
-            if hasattr(response_delta, "usage_metadata") and response_delta.usage_metadata is not None:
+            if self._should_collect_metrics(response_delta, candidate) and response_delta.usage_metadata is not None:
                 model_response.response_usage = self._get_metrics(response_delta.usage_metadata)
 
         return model_response
@@ -1442,6 +1445,18 @@ class Gemini(Model):
         setattr(new_instance, "client", None)
 
         return new_instance
+
+    def _should_collect_metrics(self, response: GenerateContentResponse, candidate: Any) -> bool:
+        """
+        Determine if metrics should be collected from the streaming response.
+        """
+        if not hasattr(response, "usage_metadata") or response.usage_metadata is None:
+            return False
+
+        if not self.collect_metrics_on_completion:
+            return True
+
+        return hasattr(candidate, "finish_reason") and candidate.finish_reason is not None
 
     def _get_metrics(self, response_usage: GenerateContentResponseUsageMetadata) -> Metrics:
         """

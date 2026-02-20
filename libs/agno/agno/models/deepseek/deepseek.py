@@ -26,6 +26,9 @@ class DeepSeek(OpenAILike):
     name: str = "DeepSeek"
     provider: str = "DeepSeek"
 
+    # DeepSeek returns cumulative token counts in each streaming chunk, so only collect on final chunk
+    collect_metrics_on_completion: bool = True
+
     api_key: Optional[str] = field(default_factory=lambda: getenv("DEEPSEEK_API_KEY"))
     base_url: str = "https://api.deepseek.com"
 
