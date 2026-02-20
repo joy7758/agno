@@ -389,9 +389,9 @@ def parse_response_with_parser_model(
 
         # Accumulate parser model metrics
         if run_response is not None:
-            from agno.metrics import accumulate_model_metrics
+            from agno.metrics import ModelType, accumulate_model_metrics
 
-            accumulate_model_metrics(parser_model_response, agent.parser_model, "parser_model", run_response)
+            accumulate_model_metrics(parser_model_response, agent.parser_model, ModelType.PARSER_MODEL, run_response)
 
         process_parser_response(
             agent=agent,
@@ -432,9 +432,9 @@ async def aparse_response_with_parser_model(
 
         # Accumulate parser model metrics
         if run_response is not None:
-            from agno.metrics import accumulate_model_metrics
+            from agno.metrics import ModelType, accumulate_model_metrics
 
-            accumulate_model_metrics(parser_model_response, agent.parser_model, "parser_model", run_response)
+            accumulate_model_metrics(parser_model_response, agent.parser_model, ModelType.PARSER_MODEL, run_response)
 
         process_parser_response(
             agent=agent,
@@ -480,7 +480,6 @@ def parse_response_with_parser_model_stream(
                 response_format=parser_response_format,
                 stream_model_response=False,
                 run_response=run_response,
-                model_type="parser_model",
             ):
                 yield from handle_model_response_chunk(
                     agent,
@@ -549,7 +548,6 @@ async def aparse_response_with_parser_model_stream(
                 response_format=parser_response_format,
                 stream_model_response=False,
                 run_response=run_response,
-                model_type="parser_model",
             )
             async for model_response_event in model_response_stream:  # type: ignore
                 for event in handle_model_response_chunk(
@@ -600,9 +598,9 @@ def generate_response_with_output_model(
 
     # Accumulate output model metrics
     if run_response is not None:
-        from agno.metrics import accumulate_model_metrics
+        from agno.metrics import ModelType, accumulate_model_metrics
 
-        accumulate_model_metrics(output_model_response, agent.output_model, "output_model", run_response)
+        accumulate_model_metrics(output_model_response, agent.output_model, ModelType.OUTPUT_MODEL, run_response)
 
     model_response.content = output_model_response.content
 
@@ -637,7 +635,7 @@ def generate_response_with_output_model_stream(
     model_response = ModelResponse(content="")
 
     for model_response_event in agent.output_model.response_stream(
-        messages=messages_for_output_model, run_response=run_response, model_type="output_model"
+        messages=messages_for_output_model, run_response=run_response
     ):
         yield from handle_model_response_chunk(
             agent,
@@ -676,9 +674,9 @@ async def agenerate_response_with_output_model(
 
     # Accumulate output model metrics
     if run_response is not None:
-        from agno.metrics import accumulate_model_metrics
+        from agno.metrics import ModelType, accumulate_model_metrics
 
-        accumulate_model_metrics(output_model_response, agent.output_model, "output_model", run_response)
+        accumulate_model_metrics(output_model_response, agent.output_model, ModelType.OUTPUT_MODEL, run_response)
 
     model_response.content = output_model_response.content
 
@@ -713,7 +711,7 @@ async def agenerate_response_with_output_model_stream(
     model_response = ModelResponse(content="")
 
     model_response_stream = agent.output_model.aresponse_stream(
-        messages=messages_for_output_model, run_response=run_response, model_type="output_model"
+        messages=messages_for_output_model, run_response=run_response
     )
 
     async for model_response_event in model_response_stream:

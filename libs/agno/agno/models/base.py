@@ -31,7 +31,7 @@ from pydantic import BaseModel
 
 from agno.exceptions import AgentRunException, ModelProviderError, RetryableModelProviderError
 from agno.media import Audio, File, Image, Video
-from agno.metrics import Metrics, ToolCallMetrics
+from agno.metrics import Metrics, ModelType, ToolCallMetrics
 from agno.models.message import Citations, Message
 from agno.models.response import ModelResponse, ModelResponseEvent, ToolExecution
 from agno.run.agent import CustomEvent, RunContentEvent, RunOutput, RunOutputEvent
@@ -126,6 +126,9 @@ class Model(ABC):
     name: Optional[str] = None
     # Provider for this Model. This is not sent to the Model API.
     provider: Optional[str] = None
+    # Functional role of this model (e.g., MODEL, OUTPUT_MODEL, PARSER_MODEL).
+    # Set by the agent during initialization; defaults to MODEL.
+    model_type: ModelType = ModelType.MODEL
 
     # -*- Do not set the following attributes directly -*-
     # -*- Set them on the Agent instead -*-
@@ -697,8 +700,7 @@ class Model(ABC):
                 if run_response is not None and model_response.response_usage is not None:
                     from agno.metrics import accumulate_model_metrics
 
-                    model_type = getattr(run_response, "_current_model_type", "model")
-                    accumulate_model_metrics(model_response, self, model_type, run_response)
+                    accumulate_model_metrics(model_response, self, self.model_type, run_response)
 
                 # Add assistant message to messages
                 messages.append(assistant_message)
@@ -919,8 +921,7 @@ class Model(ABC):
                 if run_response is not None and model_response.response_usage is not None:
                     from agno.metrics import accumulate_model_metrics
 
-                    model_type = getattr(run_response, "_current_model_type", "model")
-                    accumulate_model_metrics(model_response, self, model_type, run_response)
+                    accumulate_model_metrics(model_response, self, self.model_type, run_response)
 
                 # Add assistant message to messages
                 messages.append(assistant_message)
@@ -1317,7 +1318,6 @@ class Model(ABC):
         run_response: Optional[Union[RunOutput, TeamRunOutput]] = None,
         send_media_to_model: bool = True,
         compression_manager: Optional["CompressionManager"] = None,
-        model_type: str = "model",
     ) -> Iterator[Union[ModelResponse, RunOutputEvent, TeamRunOutputEvent]]:
         """
         Generate a streaming response from the model.
@@ -1384,31 +1384,19 @@ class Model(ABC):
                     # Initialize assistant_message.metrics for provider invoke_stream calls
                     assistant_message.metrics = Metrics()
                     # Generate response
-                    # Temporarily set model_type on run_response for metrics accumulation
-                    if run_response is not None:
-                        original_model_type = getattr(run_response, "_current_model_type", None)
-                        setattr(run_response, "_current_model_type", model_type)
-                    try:
-                        for response in self.process_response_stream(
-                            messages=messages,
-                            assistant_message=assistant_message,
-                            stream_data=stream_data,
-                            response_format=response_format,
-                            tools=_tool_dicts,
-                            tool_choice=tool_choice or self._tool_choice,
-                            run_response=run_response,
-                            compress_tool_results=_compress_tool_results,
-                        ):
-                            if self.cache_response and isinstance(response, ModelResponse):
-                                streaming_responses.append(response)
-                            yield response
-                    finally:
-                        # Restore original model_type
-                        if run_response is not None:
-                            if original_model_type is not None:
-                                setattr(run_response, "_current_model_type", original_model_type)
-                            else:
-                                delattr(run_response, "_current_model_type")
+                    for response in self.process_response_stream(
+                        messages=messages,
+                        assistant_message=assistant_message,
+                        stream_data=stream_data,
+                        response_format=response_format,
+                        tools=_tool_dicts,
+                        tool_choice=tool_choice or self._tool_choice,
+                        run_response=run_response,
+                        compress_tool_results=_compress_tool_results,
+                    ):
+                        if self.cache_response and isinstance(response, ModelResponse):
+                            streaming_responses.append(response)
+                        yield response
 
                     # Accumulate metrics for this streamed iteration
                     if run_response is not None and assistant_message.metrics is not None:
@@ -1429,7 +1417,7 @@ class Model(ABC):
                             cost=assistant_message.metrics.cost,
                             provider_metrics=assistant_message.metrics.provider_metrics,
                         )
-                        accumulate_model_metrics(_stream_model_response, self, model_type, run_response)
+                        accumulate_model_metrics(_stream_model_response, self, self.model_type, run_response)
 
                 else:
                     # Initialize message metrics and start timer before model call
@@ -1449,7 +1437,7 @@ class Model(ABC):
                     if run_response is not None and model_response.response_usage is not None:
                         from agno.metrics import accumulate_model_metrics
 
-                        accumulate_model_metrics(model_response, self, model_type, run_response)
+                        accumulate_model_metrics(model_response, self, self.model_type, run_response)
                     if self.cache_response:
                         streaming_responses.append(model_response)
                     yield model_response
@@ -1615,7 +1603,6 @@ class Model(ABC):
         run_response: Optional[Union[RunOutput, TeamRunOutput]] = None,
         send_media_to_model: bool = True,
         compression_manager: Optional["CompressionManager"] = None,
-        model_type: str = "model",
     ) -> AsyncIterator[Union[ModelResponse, RunOutputEvent, TeamRunOutputEvent]]:
         """
         Generate an asynchronous streaming response from the model.
@@ -1682,31 +1669,19 @@ class Model(ABC):
                     # Initialize assistant_message.metrics for provider ainvoke_stream calls
                     assistant_message.metrics = Metrics()
                     # Generate response
-                    # Temporarily set model_type on run_response for metrics accumulation
-                    if run_response is not None:
-                        original_model_type = getattr(run_response, "_current_model_type", None)
-                        setattr(run_response, "_current_model_type", model_type)
-                    try:
-                        async for model_response_delta in self.aprocess_response_stream(
-                            messages=messages,
-                            assistant_message=assistant_message,
-                            stream_data=stream_data,
-                            response_format=response_format,
-                            tools=_tool_dicts,
-                            tool_choice=tool_choice or self._tool_choice,
-                            run_response=run_response,
-                            compress_tool_results=_compress_tool_results,
-                        ):
-                            if self.cache_response and isinstance(model_response_delta, ModelResponse):
-                                streaming_responses.append(model_response_delta)
-                            yield model_response_delta
-                    finally:
-                        # Restore original model_type
-                        if run_response is not None:
-                            if original_model_type is not None:
-                                setattr(run_response, "_current_model_type", original_model_type)
-                            else:
-                                delattr(run_response, "_current_model_type")
+                    async for model_response_delta in self.aprocess_response_stream(
+                        messages=messages,
+                        assistant_message=assistant_message,
+                        stream_data=stream_data,
+                        response_format=response_format,
+                        tools=_tool_dicts,
+                        tool_choice=tool_choice or self._tool_choice,
+                        run_response=run_response,
+                        compress_tool_results=_compress_tool_results,
+                    ):
+                        if self.cache_response and isinstance(model_response_delta, ModelResponse):
+                            streaming_responses.append(model_response_delta)
+                        yield model_response_delta
 
                     # Accumulate metrics for this streamed iteration
                     if run_response is not None and assistant_message.metrics is not None:
@@ -1727,7 +1702,7 @@ class Model(ABC):
                             cost=assistant_message.metrics.cost,
                             provider_metrics=assistant_message.metrics.provider_metrics,
                         )
-                        accumulate_model_metrics(_stream_model_response, self, model_type, run_response)
+                        accumulate_model_metrics(_stream_model_response, self, self.model_type, run_response)
 
                 else:
                     # Initialize message metrics and start timer before model call
@@ -1747,7 +1722,7 @@ class Model(ABC):
                     if run_response is not None and model_response.response_usage is not None:
                         from agno.metrics import accumulate_model_metrics
 
-                        accumulate_model_metrics(model_response, self, model_type, run_response)
+                        accumulate_model_metrics(model_response, self, self.model_type, run_response)
                     if self.cache_response:
                         streaming_responses.append(model_response)
                     yield model_response

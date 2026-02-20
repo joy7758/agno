@@ -559,9 +559,9 @@ class SessionContextStore(LearningStore):
         )
 
         if run_response is not None and response.response_usage is not None:
-            from agno.metrics import accumulate_model_metrics
+            from agno.metrics import ModelType, accumulate_model_metrics
 
-            accumulate_model_metrics(response, model_copy, "learning_model", run_response)
+            accumulate_model_metrics(response, model_copy, ModelType.LEARNING_MODEL, run_response)
 
         if response.tool_executions:
             self.context_updated = True
@@ -628,9 +628,9 @@ class SessionContextStore(LearningStore):
         )
 
         if run_response is not None and response.response_usage is not None:
-            from agno.metrics import accumulate_model_metrics
+            from agno.metrics import ModelType, accumulate_model_metrics
 
-            accumulate_model_metrics(response, model_copy, "learning_model", run_response)
+            accumulate_model_metrics(response, model_copy, ModelType.LEARNING_MODEL, run_response)
 
         if response.tool_executions:
             self.context_updated = True

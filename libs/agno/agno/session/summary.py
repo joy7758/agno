@@ -234,9 +234,9 @@ class SessionSummaryManager:
 
         # Accumulate session summary model metrics
         if run_response is not None:
-            from agno.metrics import accumulate_model_metrics
+            from agno.metrics import ModelType, accumulate_model_metrics
 
-            accumulate_model_metrics(summary_response, self.model, "session_summary_model", run_response)
+            accumulate_model_metrics(summary_response, self.model, ModelType.SESSION_SUMMARY_MODEL, run_response)
 
         session_summary = self._process_summary_response(summary_response, self.model)
 
@@ -270,9 +270,9 @@ class SessionSummaryManager:
 
         # Accumulate session summary model metrics
         if run_response is not None:
-            from agno.metrics import accumulate_model_metrics
+            from agno.metrics import ModelType, accumulate_model_metrics
 
-            accumulate_model_metrics(summary_response, self.model, "session_summary_model", run_response)
+            accumulate_model_metrics(summary_response, self.model, ModelType.SESSION_SUMMARY_MODEL, run_response)
 
         session_summary = self._process_summary_response(summary_response, self.model)
 

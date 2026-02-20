@@ -1,9 +1,25 @@
 from dataclasses import asdict, dataclass
 from dataclasses import fields as dc_fields
+from enum import Enum
 from time import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from agno.utils.timer import Timer
+
+
+class ModelType(str, Enum):
+    """Identifies the functional role of a model within an agent run."""
+
+    MODEL = "model"
+    OUTPUT_MODEL = "output_model"
+    PARSER_MODEL = "parser_model"
+    MEMORY_MODEL = "memory_model"
+    REASONING_MODEL = "reasoning_model"
+    SESSION_SUMMARY_MODEL = "session_summary_model"
+    CULTURE_MODEL = "culture_model"
+    LEARNING_MODEL = "learning_model"
+    COMPRESSION_MODEL = "compression_model"
+
 
 if TYPE_CHECKING:
     from agno.models.base import Model
@@ -625,7 +641,7 @@ class SessionMetrics:
 def accumulate_model_metrics(
     model_response: "ModelResponse",
     model: "Model",
-    model_type: str,
+    model_type: "Union[ModelType, str]",
     run_response: "Union[RunOutput, TeamRunOutput]",
 ) -> None:
     """Accumulate metrics from a model response into run_response.metrics.
@@ -633,7 +649,7 @@ def accumulate_model_metrics(
     Args:
         model_response: The ModelResponse containing response_usage metrics
         model: The Model instance that generated the response
-        model_type: Type identifier ("model", "output_model", "reasoning_model", etc.)
+        model_type: Type identifier (ModelType enum or string for backward compatibility)
         run_response: The RunOutput to accumulate metrics into
     """
 
@@ -648,9 +664,23 @@ def accumulate_model_metrics(
         run_response.metrics = Metrics()
         run_response.metrics.start_timer()
 
+    # Cache metrics reference to avoid repeated attribute lookups
+    metrics = run_response.metrics
+
     # Initialize details dict if None
-    if run_response.metrics.details is None:
-        run_response.metrics.details = {}
+    if metrics.details is None:
+        metrics.details = {}
+
+    # Coerce token values once — reused for both ModelMetrics and top-level accumulation
+    input_tokens = usage.input_tokens or 0
+    output_tokens = usage.output_tokens or 0
+    total_tokens = usage.total_tokens or 0
+    audio_input_tokens = usage.audio_input_tokens or 0
+    audio_output_tokens = usage.audio_output_tokens or 0
+    audio_total_tokens = usage.audio_total_tokens or 0
+    cache_read_tokens = usage.cache_read_tokens or 0
+    cache_write_tokens = usage.cache_write_tokens or 0
+    reasoning_tokens = usage.reasoning_tokens or 0
 
     # Get model info
     model_id = model.id
@@ -660,66 +690,62 @@ def accumulate_model_metrics(
     model_metrics = ModelMetrics(
         id=model_id,
         provider=model_provider,
-        input_tokens=usage.input_tokens or 0,
-        output_tokens=usage.output_tokens or 0,
-        total_tokens=usage.total_tokens or 0,
-        audio_input_tokens=usage.audio_input_tokens or 0,
-        audio_output_tokens=usage.audio_output_tokens or 0,
-        audio_total_tokens=usage.audio_total_tokens or 0,
-        cache_read_tokens=usage.cache_read_tokens or 0,
-        cache_write_tokens=usage.cache_write_tokens or 0,
-        reasoning_tokens=usage.reasoning_tokens or 0,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        audio_input_tokens=audio_input_tokens,
+        audio_output_tokens=audio_output_tokens,
+        audio_total_tokens=audio_total_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+        reasoning_tokens=reasoning_tokens,
         time_to_first_token=usage.time_to_first_token,
         cost=usage.cost,
         provider_metrics=usage.provider_metrics,
     )
 
     # Add to details dict, merging if same provider+id already exists
-    if model_type not in run_response.metrics.details:
-        run_response.metrics.details[model_type] = []
-
-    # Look for an existing entry with the same provider and id to merge into
-    existing_entry = None
-    for entry in run_response.metrics.details[model_type]:
-        if entry.id == model_id and entry.provider == model_provider:
-            existing_entry = entry
-            break
-
-    if existing_entry is not None:
-        existing_entry.accumulate(model_metrics)
+    _model_type_key = model_type.value if isinstance(model_type, ModelType) else model_type
+    entries = metrics.details.get(_model_type_key)
+    if entries is None:
+        metrics.details[_model_type_key] = [model_metrics]
     else:
-        run_response.metrics.details[model_type].append(model_metrics)
+        # Look for an existing entry with the same provider and id to merge into
+        for entry in entries:
+            if entry.id == model_id and entry.provider == model_provider:
+                entry.accumulate(model_metrics)
+                break
+        else:
+            entries.append(model_metrics)
 
     # Accumulate token counts to top-level metrics
-    run_response.metrics.input_tokens += usage.input_tokens or 0
-    run_response.metrics.output_tokens += usage.output_tokens or 0
-    run_response.metrics.total_tokens += usage.total_tokens or 0
-    run_response.metrics.audio_input_tokens += usage.audio_input_tokens or 0
-    run_response.metrics.audio_output_tokens += usage.audio_output_tokens or 0
-    run_response.metrics.audio_total_tokens += usage.audio_total_tokens or 0
-    run_response.metrics.cache_read_tokens += usage.cache_read_tokens or 0
-    run_response.metrics.cache_write_tokens += usage.cache_write_tokens or 0
-    run_response.metrics.reasoning_tokens += usage.reasoning_tokens or 0
+    metrics.input_tokens += input_tokens
+    metrics.output_tokens += output_tokens
+    metrics.total_tokens += total_tokens
+    metrics.audio_input_tokens += audio_input_tokens
+    metrics.audio_output_tokens += audio_output_tokens
+    metrics.audio_total_tokens += audio_total_tokens
+    metrics.cache_read_tokens += cache_read_tokens
+    metrics.cache_write_tokens += cache_write_tokens
+    metrics.reasoning_tokens += reasoning_tokens
 
     # Accumulate cost
     if usage.cost is not None:
-        run_response.metrics.cost = (
-            run_response.metrics.cost if run_response.metrics.cost is not None else 0
-        ) + usage.cost
+        metrics.cost = (metrics.cost or 0) + usage.cost
 
     # Handle time_to_first_token: only set top-level if model_type is "model" or "reasoning_model"
     # and current value is None or later (we want the earliest)
-    if model_type in ("model", "reasoning_model") and usage.time_to_first_token is not None:
-        if run_response.metrics.time_to_first_token is None:
-            run_response.metrics.time_to_first_token = usage.time_to_first_token
-        elif usage.time_to_first_token < run_response.metrics.time_to_first_token:
-            run_response.metrics.time_to_first_token = usage.time_to_first_token
+    if (
+        model_type == ModelType.MODEL or model_type == ModelType.REASONING_MODEL
+    ) and usage.time_to_first_token is not None:
+        if metrics.time_to_first_token is None or usage.time_to_first_token < metrics.time_to_first_token:
+            metrics.time_to_first_token = usage.time_to_first_token
 
     # Merge provider_metrics if present
     if usage.provider_metrics is not None:
-        if run_response.metrics.provider_metrics is None:
-            run_response.metrics.provider_metrics = {}
-        run_response.metrics.provider_metrics.update(usage.provider_metrics)
+        if metrics.provider_metrics is None:
+            metrics.provider_metrics = {}
+        metrics.provider_metrics.update(usage.provider_metrics)
 
 
 def accumulate_eval_metrics(

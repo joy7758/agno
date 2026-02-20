@@ -7,6 +7,7 @@ All metric classes now live in agno.metrics.  This shim keeps
 from agno.metrics import (  # noqa: F401
     Metrics,
     ModelMetrics,
+    ModelType,
     SessionMetrics,
     ToolCallMetrics,
     accumulate_eval_metrics,
@@ -17,6 +18,7 @@ from agno.metrics import (  # noqa: F401
 __all__ = [
     "Metrics",
     "ModelMetrics",
+    "ModelType",
     "SessionMetrics",
     "ToolCallMetrics",
     "accumulate_eval_metrics",

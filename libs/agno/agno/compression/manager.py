@@ -131,9 +131,9 @@ class CompressionManager:
 
             # Accumulate compression model metrics
             if run_response is not None:
-                from agno.metrics import accumulate_model_metrics
+                from agno.metrics import ModelType, accumulate_model_metrics
 
-                accumulate_model_metrics(response, self.model, "compression_model", run_response)
+                accumulate_model_metrics(response, self.model, ModelType.COMPRESSION_MODEL, run_response)
 
             return response.content
         except Exception as e:
@@ -236,9 +236,9 @@ class CompressionManager:
 
             # Accumulate compression model metrics
             if run_response is not None:
-                from agno.metrics import accumulate_model_metrics
+                from agno.metrics import ModelType, accumulate_model_metrics
 
-                accumulate_model_metrics(response, self.model, "compression_model", run_response)
+                accumulate_model_metrics(response, self.model, ModelType.COMPRESSION_MODEL, run_response)
 
             return response.content
         except Exception as e:
