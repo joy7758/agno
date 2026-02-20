@@ -2,6 +2,7 @@ import base64
 import json
 from os import getenv
 from pathlib import Path
+from ssl import SSLContext
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
@@ -33,6 +34,7 @@ class SlackTools(Toolkit):
         enable_list_users: bool = False,
         enable_get_user_info: bool = False,
         all: bool = False,
+        ssl: Optional[SSLContext] = None,
         **kwargs,
     ):
         """
@@ -53,11 +55,12 @@ class SlackTools(Toolkit):
             enable_list_users (bool): Whether to enable the list_users tool. Defaults to False.
             enable_get_user_info (bool): Whether to enable the get_user_info tool. Defaults to False.
             all (bool): Whether to enable all tools. Defaults to False.
+            ssl (SSLContext): Optional SSL context for the Slack WebClient. Defaults to None.
         """
         self.token: Optional[str] = token or getenv("SLACK_TOKEN")
         if self.token is None or self.token == "":
             raise ValueError("SLACK_TOKEN is not set")
-        self.client = WebClient(token=self.token)
+        self.client = WebClient(token=self.token, ssl=ssl)
         self.markdown = markdown
         self.output_directory = Path(output_directory) if output_directory else None
 

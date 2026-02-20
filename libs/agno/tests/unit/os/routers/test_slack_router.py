@@ -326,7 +326,7 @@ def test_explicit_token_passed_to_slack_tools():
     ):
         mock_cls.return_value = _make_slack_mock()
         _build_app(agent_mock, token="xoxb-explicit-token")
-        mock_cls.assert_called_once_with(token="xoxb-explicit-token")
+        mock_cls.assert_called_once_with(token="xoxb-explicit-token", ssl=None)
 
 
 def test_no_token_passes_none_to_slack_tools():
@@ -340,7 +340,7 @@ def test_no_token_passes_none_to_slack_tools():
     ):
         mock_cls.return_value = _make_slack_mock()
         _build_app(agent_mock)
-        mock_cls.assert_called_once_with(token=None)
+        mock_cls.assert_called_once_with(token=None, ssl=None)
 
 
 def test_explicit_signing_secret_used_in_verification():
@@ -733,10 +733,13 @@ async def test_streaming_dispatches_stream_handler():
     mock_slack = _make_slack_mock()
     mock_slack.token = "xoxb-test"
 
+    mock_stream = AsyncMock()
+    mock_stream.append = AsyncMock()
+    mock_stream.stop = AsyncMock()
+
     mock_async_client = AsyncMock()
     mock_async_client.assistant_threads_setStatus = AsyncMock()
-    mock_async_client.chat_startStream = AsyncMock(return_value={"ts": "123.456"})
-    mock_async_client.chat_stopStream = AsyncMock()
+    mock_async_client.chat_stream = Mock(return_value=mock_stream)
 
     with (
         patch("agno.os.interfaces.slack.router.verify_slack_signature", return_value=True),
@@ -762,8 +765,6 @@ async def test_streaming_dispatches_stream_handler():
         }
         response = _make_signed_request(client, body)
         assert response.status_code == 200
-        # With deferred start and no content, stream is never opened
-        # so we just verify the status was set
         import asyncio
 
         await asyncio.sleep(0.5)
@@ -788,12 +789,14 @@ async def test_recipient_user_id_is_human_user():
     mock_slack = _make_slack_mock()
     mock_slack.token = "xoxb-test"
 
+    mock_stream = AsyncMock()
+    mock_stream.append = AsyncMock()
+    mock_stream.stop = AsyncMock()
+
     mock_async_client = AsyncMock()
     mock_async_client.assistant_threads_setStatus = AsyncMock()
     mock_async_client.assistant_threads_setTitle = AsyncMock()
-    mock_async_client.chat_startStream = AsyncMock(return_value={"ts": "123.456"})
-    mock_async_client.chat_appendStream = AsyncMock()
-    mock_async_client.chat_stopStream = AsyncMock()
+    mock_async_client.chat_stream = Mock(return_value=mock_stream)
 
     with (
         patch("agno.os.interfaces.slack.router.verify_slack_signature", return_value=True),
@@ -819,26 +822,330 @@ async def test_recipient_user_id_is_human_user():
         }
         response = _make_signed_request(client, body)
         assert response.status_code == 200
-        await _wait_for_mock_call(mock_async_client.chat_stopStream)
-        call_kwargs = mock_async_client.chat_startStream.call_args.kwargs
+        await _wait_for_mock_call(mock_stream.stop)
+        call_kwargs = mock_async_client.chat_stream.call_args.kwargs
         assert call_kwargs.get("recipient_team_id") == "T123"
         # Must be the human user ID, NOT the bot ID
         assert call_kwargs.get("recipient_user_id") == "U_HUMAN_ID"
 
 
 def test_team_event_mapping():
-    """Team and workflow event strings are correctly mapped in event sets (Bug #1 fix)."""
+    """Agent, team, and workflow event strings all have dispatch handlers."""
     from agno.agent import RunEvent
-    from agno.os.interfaces.slack.router import _CONTENT_EVENTS, _STEP_OUTPUT, _TOOL_COMPLETED, _TOOL_STARTED
+    from agno.os.interfaces.slack.handlers import DISPATCH
     from agno.run.team import TeamRunEvent
     from agno.run.workflow import WorkflowRunEvent
 
-    assert RunEvent.tool_call_started.value in _TOOL_STARTED
-    assert RunEvent.tool_call_completed.value in _TOOL_COMPLETED
-    assert RunEvent.run_content.value in _CONTENT_EVENTS
+    assert RunEvent.tool_call_started.value in DISPATCH
+    assert RunEvent.tool_call_completed.value in DISPATCH
+    assert RunEvent.run_content.value in DISPATCH
 
-    assert TeamRunEvent.tool_call_started.value in _TOOL_STARTED
-    assert TeamRunEvent.tool_call_completed.value in _TOOL_COMPLETED
-    assert TeamRunEvent.run_content.value in _CONTENT_EVENTS
+    assert TeamRunEvent.tool_call_started.value in DISPATCH
+    assert TeamRunEvent.tool_call_completed.value in DISPATCH
+    assert TeamRunEvent.run_content.value in DISPATCH
 
-    assert WorkflowRunEvent.step_output.value in _STEP_OUTPUT
+    assert WorkflowRunEvent.step_output.value in DISPATCH
+
+    # Agent and team events for the same semantic action share the same handler
+    assert DISPATCH[RunEvent.tool_call_started.value] is DISPATCH[TeamRunEvent.tool_call_started.value]
+    assert DISPATCH[RunEvent.run_content.value] is DISPATCH[TeamRunEvent.run_content.value]
+
+
+def test_workflow_dispatch_overrides():
+    """WORKFLOW_DISPATCH suppresses all nested agent events (tools, reasoning, memory, content, lifecycle)."""
+    from agno.agent import RunEvent
+    from agno.os.interfaces.slack.handlers import (
+        DISPATCH,
+        WORKFLOW_DISPATCH,
+        handle_content,
+        handle_workflow_content,
+        handle_workflow_run_noop,
+        handle_workflow_step_output,
+    )
+    from agno.run.team import TeamRunEvent
+    from agno.run.workflow import WorkflowRunEvent
+
+    # Content events are overridden to suppress intermediate text
+    assert DISPATCH[RunEvent.run_content.value] is handle_content
+    assert WORKFLOW_DISPATCH[RunEvent.run_content.value] is handle_workflow_content
+    assert WORKFLOW_DISPATCH[TeamRunEvent.run_content.value] is handle_workflow_content
+
+    # StepOutput is overridden to capture instead of stream
+    assert DISPATCH[WorkflowRunEvent.step_output.value] is handle_content
+    assert WORKFLOW_DISPATCH[WorkflowRunEvent.step_output.value] is handle_workflow_step_output
+
+    # Nested run lifecycle is overridden to no-op
+    assert WORKFLOW_DISPATCH[RunEvent.run_completed.value] is handle_workflow_run_noop
+    assert WORKFLOW_DISPATCH[TeamRunEvent.run_completed.value] is handle_workflow_run_noop
+    assert WORKFLOW_DISPATCH[RunEvent.run_error.value] is handle_workflow_run_noop
+    assert WORKFLOW_DISPATCH[RunEvent.run_cancelled.value] is handle_workflow_run_noop
+
+    # Reasoning, tool, and memory events are suppressed in workflow mode
+    assert WORKFLOW_DISPATCH[RunEvent.reasoning_started.value] is handle_workflow_run_noop
+    assert WORKFLOW_DISPATCH[RunEvent.tool_call_started.value] is handle_workflow_run_noop
+    assert WORKFLOW_DISPATCH[RunEvent.tool_call_completed.value] is handle_workflow_run_noop
+    assert WORKFLOW_DISPATCH[RunEvent.memory_update_started.value] is handle_workflow_run_noop
+
+
+def test_workflow_dispatch_inherits_base():
+    """WORKFLOW_DISPATCH inherits workflow structural handlers from DISPATCH."""
+    from agno.os.interfaces.slack.handlers import DISPATCH, WORKFLOW_DISPATCH
+    from agno.run.workflow import WorkflowRunEvent
+
+    # Workflow step/loop/parallel/condition handlers inherited unchanged
+    assert WORKFLOW_DISPATCH[WorkflowRunEvent.step_started.value] is DISPATCH[WorkflowRunEvent.step_started.value]
+    assert (
+        WORKFLOW_DISPATCH[WorkflowRunEvent.loop_execution_started.value]
+        is DISPATCH[WorkflowRunEvent.loop_execution_started.value]
+    )
+    assert (
+        WORKFLOW_DISPATCH[WorkflowRunEvent.parallel_execution_started.value]
+        is DISPATCH[WorkflowRunEvent.parallel_execution_started.value]
+    )
+
+
+@pytest.mark.asyncio
+async def test_workflow_content_suppressed():
+    """handle_workflow_content suppresses text but collects media."""
+    from agno.os.interfaces.slack.handlers import handle_workflow_content
+    from agno.os.interfaces.slack.state import StreamState
+
+    state = StreamState()
+    chunk = Mock(content="intermediate text", images=None, videos=None, audio=None, files=None)
+    stream = AsyncMock()
+
+    result = await handle_workflow_content(chunk, state, stream)
+    assert result == "continue"
+    assert state.text_buffer == ""
+
+
+@pytest.mark.asyncio
+async def test_workflow_step_output_captures():
+    """handle_workflow_step_output captures content into workflow_final_content."""
+    from agno.os.interfaces.slack.handlers import handle_workflow_step_output
+    from agno.os.interfaces.slack.state import StreamState
+
+    state = StreamState()
+    stream = AsyncMock()
+
+    # First step output
+    chunk1 = Mock(content="step 1 output", images=None, videos=None, audio=None, files=None)
+    await handle_workflow_step_output(chunk1, state, stream)
+    assert state.workflow_final_content == "step 1 output"
+
+    # Second step output overwrites (last wins)
+    chunk2 = Mock(content="step 2 output", images=None, videos=None, audio=None, files=None)
+    await handle_workflow_step_output(chunk2, state, stream)
+    assert state.workflow_final_content == "step 2 output"
+    assert state.text_buffer == ""
+
+
+@pytest.mark.asyncio
+async def test_workflow_completed_emits_final_content():
+    """handle_workflow_completed puts WorkflowCompletedEvent.content into text_buffer."""
+    from agno.os.interfaces.slack.handlers import handle_workflow_completed
+    from agno.os.interfaces.slack.state import StreamState
+
+    state = StreamState()
+    state.entity_name = "News Reporter"
+    stream = AsyncMock()
+    stream.append = AsyncMock()
+
+    chunk = Mock(
+        content="Final article text",
+        run_id="abc123",
+        workflow_name="News Reporter",
+        images=None,
+        videos=None,
+        audio=None,
+        files=None,
+    )
+    result = await handle_workflow_completed(chunk, state, stream)
+    assert result == "continue"
+    assert "Final article text" in state.text_buffer
+
+
+@pytest.mark.asyncio
+async def test_workflow_completed_fallback_to_captured():
+    """handle_workflow_completed falls back to workflow_final_content if chunk.content is empty."""
+    from agno.os.interfaces.slack.handlers import handle_workflow_completed
+    from agno.os.interfaces.slack.state import StreamState
+
+    state = StreamState()
+    state.workflow_final_content = "captured from step output"
+    stream = AsyncMock()
+    stream.append = AsyncMock()
+
+    chunk = Mock(
+        content=None,
+        run_id="abc123",
+        workflow_name="Test",
+        images=None,
+        videos=None,
+        audio=None,
+        files=None,
+    )
+    await handle_workflow_completed(chunk, state, stream)
+    assert "captured from step output" in state.text_buffer
+
+
+@pytest.mark.asyncio
+async def test_workflow_run_noop_ignores_lifecycle():
+    """handle_workflow_run_noop does not complete cards or break the stream."""
+    from agno.os.interfaces.slack.handlers import handle_workflow_run_noop
+    from agno.os.interfaces.slack.state import StreamState
+
+    state = StreamState()
+    state.track_task("wf_step_1", "Research")
+    stream = AsyncMock()
+    stream.append = AsyncMock()
+
+    chunk = Mock(images=None, videos=None, audio=None, files=None)
+    result = await handle_workflow_run_noop(chunk, state, stream)
+    assert result == "continue"
+    # Card should NOT be completed
+    assert state.task_cards["wf_step_1"].status == "in_progress"
+    stream.append.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_structural_handlers_emit_cards():
+    """Parallel, condition, router, steps-container handlers now emit task cards."""
+    from agno.os.interfaces.slack.handlers import (
+        handle_condition_completed,
+        handle_condition_started,
+        handle_parallel_completed,
+        handle_parallel_started,
+        handle_router_completed,
+        handle_router_started,
+        handle_steps_execution_completed,
+        handle_steps_execution_started,
+    )
+    from agno.os.interfaces.slack.state import StreamState
+
+    handlers = [
+        (handle_parallel_started, handle_parallel_completed, "wf_parallel_p1"),
+        (handle_condition_started, handle_condition_completed, "wf_cond_c1"),
+        (handle_router_started, handle_router_completed, "wf_router_r1"),
+        (handle_steps_execution_started, handle_steps_execution_completed, "wf_steps_s1"),
+    ]
+    for start_fn, complete_fn, expected_key in handlers:
+        state = StreamState()
+        stream = AsyncMock()
+        stream.append = AsyncMock()
+
+        chunk_start = Mock(step_name="test_step", step_id=expected_key.split("_", 2)[-1])
+        await start_fn(chunk_start, state, stream)
+        assert expected_key in state.task_cards, f"{start_fn.__name__} did not track card"
+        assert state.task_cards[expected_key].status == "in_progress"
+
+        chunk_end = Mock(
+            step_name="test_step",
+            step_id=expected_key.split("_", 2)[-1],
+            branch_count=2,
+            selected_step="branch_a",
+        )
+        await complete_fn(chunk_end, state, stream)
+        assert state.task_cards[expected_key].status == "complete", f"{complete_fn.__name__} did not complete card"
+
+
+def test_track_task_noop_when_cards_frozen():
+    """track_task should be a no-op when cards_frozen=True."""
+    from agno.os.interfaces.slack.state import StreamState
+
+    state = StreamState()
+    state.track_task("step1", "Research")
+    assert "step1" in state.task_cards
+    assert state.progress_started is True
+
+    state.cards_frozen = True
+    state.track_task("step2", "Write Article")
+    assert "step2" not in state.task_cards
+
+
+@pytest.mark.asyncio
+async def test_proxy_strips_task_chunks_when_frozen():
+    """After rotation, task_update chunks are stripped from append calls."""
+    from agno.os.interfaces.slack.state import StreamState
+    from agno.os.interfaces.slack.stream_proxy import SplitStreamProxy
+
+    state = StreamState()
+    state.progress_started = True
+
+    mock_async_client = AsyncMock()
+    mock_stream = AsyncMock()
+    mock_stream.append = AsyncMock()
+    mock_stream.stop = AsyncMock()
+    mock_async_client.chat_stream = AsyncMock(return_value=mock_stream)
+
+    proxy = SplitStreamProxy(mock_async_client, state, {"channel": "C1", "thread_ts": "1.0"})
+    proxy._stream = mock_stream
+    proxy._segment_count = 1
+
+    # Before freezing: chunks pass through
+    task_chunk = {"type": "task_update", "id": "s1", "title": "Step 1", "status": "in_progress"}
+    await proxy.append(chunks=[task_chunk], markdown_text="hello")
+    assert mock_stream.append.call_count == 1
+    call_kw = mock_stream.append.call_args.kwargs
+    assert any(c.get("type") == "task_update" for c in call_kw.get("chunks", []))
+
+    mock_stream.append.reset_mock()
+
+    # Freeze cards (simulates rotation)
+    state.cards_frozen = True
+
+    # After freezing: task_update chunks are stripped; markdown still passes
+    await proxy.append(chunks=[task_chunk], markdown_text="world")
+    assert mock_stream.append.call_count == 1
+    call_kw = mock_stream.append.call_args.kwargs
+    assert "chunks" not in call_kw
+    assert call_kw.get("markdown_text") == "world"
+
+
+@pytest.mark.asyncio
+async def test_proxy_skips_chunks_only_append_when_frozen():
+    """A chunks-only append with only task_update entries becomes a no-op when frozen."""
+    from agno.os.interfaces.slack.state import StreamState
+    from agno.os.interfaces.slack.stream_proxy import SplitStreamProxy
+
+    state = StreamState()
+    state.cards_frozen = True
+
+    mock_async_client = AsyncMock()
+    mock_stream = AsyncMock()
+    mock_stream.append = AsyncMock()
+    mock_async_client.chat_stream = AsyncMock(return_value=mock_stream)
+
+    proxy = SplitStreamProxy(mock_async_client, state, {"channel": "C1", "thread_ts": "1.0"})
+    proxy._stream = mock_stream
+    proxy._segment_count = 1
+
+    task_chunk = {"type": "task_update", "id": "s2", "title": "Step 2", "status": "complete"}
+    await proxy.append(chunks=[task_chunk])
+    mock_stream.append.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_proxy_stop_strips_task_chunks_when_frozen():
+    """stop() also strips task_update chunks when cards_frozen."""
+    from agno.os.interfaces.slack.state import StreamState
+    from agno.os.interfaces.slack.stream_proxy import SplitStreamProxy
+
+    state = StreamState()
+    state.cards_frozen = True
+
+    mock_async_client = AsyncMock()
+    mock_stream = AsyncMock()
+    mock_stream.stop = AsyncMock()
+    mock_async_client.chat_stream = AsyncMock(return_value=mock_stream)
+
+    proxy = SplitStreamProxy(mock_async_client, state, {"channel": "C1", "thread_ts": "1.0"})
+    proxy._stream = mock_stream
+    proxy._segment_count = 1
+
+    task_chunk = {"type": "task_update", "id": "s3", "title": "Step 3", "status": "complete"}
+    await proxy.stop(chunks=[task_chunk], markdown_text="final")
+    mock_stream.stop.assert_called_once()
+    call_kw = mock_stream.stop.call_args.kwargs
+    assert "chunks" not in call_kw
+    assert call_kw.get("markdown_text") == "final"

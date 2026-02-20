@@ -265,4 +265,4 @@ agent_os = builder()
 app = agent_os.get_app()
 
 if __name__ == "__main__":
-    agent_os.serve(app="test_streaming_events:app", reload=True, port=7777)
+    agent_os.serve(app="test_streaming_events:app", reload=True, port=8000)

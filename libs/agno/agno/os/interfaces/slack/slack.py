@@ -1,3 +1,4 @@
+from ssl import SSLContext
 from typing import Dict, List, Optional, Union
 
 from fastapi.routing import APIRouter
@@ -30,6 +31,7 @@ class Slack(BaseInterface):
         buffer_size: int = 256,
         initial_buffer_size: int = 1,
         suggested_prompts: Optional[List[Dict[str, str]]] = None,
+        ssl: Optional[SSLContext] = None,
     ):
         self.agent = agent
         self.team = team
@@ -45,6 +47,7 @@ class Slack(BaseInterface):
         self.buffer_size = buffer_size
         self.initial_buffer_size = initial_buffer_size
         self.suggested_prompts = suggested_prompts
+        self.ssl = ssl
 
         if not (self.agent or self.team or self.workflow):
             raise ValueError("Slack requires an agent, team or workflow")
@@ -66,6 +69,7 @@ class Slack(BaseInterface):
             buffer_size=self.buffer_size,
             initial_buffer_size=self.initial_buffer_size,
             suggested_prompts=self.suggested_prompts,
+            ssl=self.ssl,
         )
 
         return self.router
