@@ -32,7 +32,7 @@ def attach_routes(
     agent: Optional[Union[Agent, RemoteAgent]] = None,
     team: Optional[Union[Team, RemoteTeam]] = None,
     workflow: Optional[Union[Workflow, RemoteWorkflow]] = None,
-    show_reasoning: bool = False,
+    show_reasoning: bool = True,
 ) -> APIRouter:
     if agent is None and team is None and workflow is None:
         raise ValueError("Either agent, team, or workflow must be provided.")
@@ -222,7 +222,7 @@ def attach_routes(
                 _send_whatsapp_message(
                     whatsapp_tools,
                     phone_number,
-                    f"Reasoning: \n{response.reasoning_content}",
+                    f"Reasoning:\n{response.reasoning_content}",
                     italics=True,
                 )
 

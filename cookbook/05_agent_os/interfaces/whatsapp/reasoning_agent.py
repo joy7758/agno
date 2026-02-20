@@ -21,12 +21,13 @@ agent_db = SqliteDb(db_file="tmp/persistent_memory.db")
 
 reasoning_finance_agent = Agent(
     name="Reasoning Finance Agent",
-    model=Claude(id="claude-3-7-sonnet-latest"),
+    model=Claude(id="claude-sonnet-4-6"),
     db=agent_db,
     tools=[
         ReasoningTools(add_instructions=True),
         YFinanceTools(),
     ],
+    debug_mode=True,
     instructions="Use tables to display data. When you use thinking tools, keep the thinking brief.",
     add_datetime_to_context=True,
     markdown=True,
@@ -36,7 +37,7 @@ reasoning_finance_agent = Agent(
 # Setup our AgentOS app
 agent_os = AgentOS(
     agents=[reasoning_finance_agent],
-    interfaces=[Whatsapp(agent=reasoning_finance_agent)],
+    interfaces=[Whatsapp(agent=reasoning_finance_agent, show_reasoning=True)],
 )
 app = agent_os.get_app()
 

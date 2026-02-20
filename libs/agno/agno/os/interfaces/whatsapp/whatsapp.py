@@ -21,12 +21,14 @@ class Whatsapp(BaseInterface):
         workflow: Optional[Union[Workflow, RemoteWorkflow]] = None,
         prefix: str = "/whatsapp",
         tags: Optional[List[str]] = None,
+        show_reasoning: bool = True,
     ):
         self.agent = agent
         self.team = team
         self.workflow = workflow
         self.prefix = prefix
         self.tags = tags or ["Whatsapp"]
+        self.show_reasoning = show_reasoning
 
         if not (self.agent or self.team or self.workflow):
             raise ValueError("Whatsapp requires an agent, team, or workflow")
@@ -34,6 +36,12 @@ class Whatsapp(BaseInterface):
     def get_router(self) -> APIRouter:
         self.router = APIRouter(prefix=self.prefix, tags=self.tags)  # type: ignore
 
-        self.router = attach_routes(router=self.router, agent=self.agent, team=self.team, workflow=self.workflow)
+        self.router = attach_routes(
+            router=self.router,
+            agent=self.agent,
+            team=self.team,
+            workflow=self.workflow,
+            show_reasoning=self.show_reasoning,
+        )
 
         return self.router
