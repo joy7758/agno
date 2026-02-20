@@ -19,9 +19,8 @@ class StreamState:
 
     reasoning_round: int = 0
 
-    # Active task cards tracked for stream rotation and completion
+    # Active task cards tracked for completion
     progress_started: bool = False
-    cards_frozen: bool = False
     task_cards: Dict[str, TaskCard] = field(default_factory=dict)
 
     # Lookup maps
@@ -40,8 +39,6 @@ class StreamState:
     workflow_final_content: str = ""
 
     def track_task(self, key: str, title: str) -> None:
-        if self.cards_frozen:
-            return
         self.task_cards[key] = TaskCard(key=key, title=title)
         self.progress_started = True
 

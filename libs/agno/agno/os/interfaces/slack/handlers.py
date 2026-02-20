@@ -1,7 +1,7 @@
 from typing import Any, Callable, Coroutine, Literal, Optional
 
 from agno.agent import RunEvent
-from agno.os.interfaces.slack.helpers import extract_sources, member_name, task_id
+from agno.os.interfaces.slack.helpers import member_name, task_id
 from agno.os.interfaces.slack.state import StreamState
 from agno.run.team import TeamRunEvent
 from agno.run.workflow import WorkflowRunEvent
@@ -58,13 +58,10 @@ async def _emit_task(
     status: str,
     *,
     output: str | None = None,
-    sources: list | None = None,
 ) -> None:
     chunk: dict = {"type": "task_update", "id": task_id, "title": title, "status": status}
     if output:
         chunk["output"] = _truncate(output)
-    if sources:
-        chunk["sources"] = sources[:5]
     await stream.append(chunks=[chunk])
 
 
@@ -77,14 +74,6 @@ async def handle_reasoning_started(chunk: Any, state: StreamState, stream: Any) 
     key = f"reasoning_{state.reasoning_round}"
     state.track_task(key, "Reasoning")
     await _emit_task(stream, key, "Reasoning", "in_progress")
-    return "continue"
-
-
-async def handle_reasoning_step(chunk: Any, state: StreamState, stream: Any) -> Optional[HandlerAction]:
-    return "continue"
-
-
-async def handle_reasoning_delta(chunk: Any, state: StreamState, stream: Any) -> Optional[HandlerAction]:
     return "continue"
 
 
@@ -126,20 +115,8 @@ async def handle_tool_completed(chunk: Any, state: StreamState, stream: Any) -> 
     if member:
         label = f"{member}: {label}"
 
-    tool_result = getattr(chunk.tool, "result", None) if chunk.tool else None  # type: ignore[union-attr]
     errored = chunk.tool.tool_call_error if chunk.tool else False  # type: ignore[union-attr]
     status = "error" if errored else "complete"
-    sources: list = []
-    output_text = None
-
-    if tool_result:
-        result_text = str(tool_result).strip()
-        if result_text:
-            sources = extract_sources(result_text)
-            if sources:
-                output_text = f"Found {len(sources)} sources"
-            else:
-                output_text = _truncate(result_text, 120)
 
     if tid:
         if tid in state.tool_line_map:
@@ -153,7 +130,7 @@ async def handle_tool_completed(chunk: Any, state: StreamState, stream: Any) -> 
                 state.error_task(tid)
             else:
                 state.complete_task(tid)
-        await _emit_task(stream, tid, label, status, output=output_text, sources=sources[:5] if sources else None)
+        await _emit_task(stream, tid, label, status)
 
     state.collect_media(chunk)
     return None
@@ -243,10 +220,8 @@ async def handle_memory_started(chunk: Any, state: StreamState, stream: Any) -> 
 
 
 async def handle_memory_completed(chunk: Any, state: StreamState, stream: Any) -> Optional[HandlerAction]:
-    memories = getattr(chunk, "memories", None)
-    output = f"{len(memories)} memories saved" if memories else None
     state.complete_task("memory_update")
-    await _emit_task(stream, "memory_update", "Updating memory", "complete", output=output)
+    await _emit_task(stream, "memory_update", "Updating memory", "complete")
     return "continue"
 
 
@@ -406,13 +381,11 @@ async def handle_loop_iter_completed(chunk: Any, state: StreamState, stream: Any
 async def handle_loop_completed(chunk: Any, state: StreamState, stream: Any) -> Optional[HandlerAction]:
     step_name = getattr(chunk, "step_name", None) or "loop"
     loop_key = getattr(chunk, "step_id", None) or step_name
-    total = getattr(chunk, "total_iterations", None)
     key = f"wf_loop_{loop_key}"
     title = f"Loop: {step_name}"
 
-    output = f"Completed {total} iterations" if total else None
     state.complete_task(key)
-    await _emit_task(stream, key, title, "complete", output=output)
+    await _emit_task(stream, key, title, "complete")
     return "continue"
 
 
@@ -436,10 +409,8 @@ async def handle_parallel_completed(chunk: Any, state: StreamState, stream: Any)
     step_id = getattr(chunk, "step_id", None) or step_name
     key = f"wf_parallel_{step_id}"
     title = f"Parallel: {step_name}"
-    branch_count = getattr(chunk, "branch_count", None)
-    output = f"{branch_count} branches completed" if branch_count else None
     state.complete_task(key)
-    await _emit_task(stream, key, title, "complete", output=output)
+    await _emit_task(stream, key, title, "complete")
     return "continue"
 
 
@@ -463,10 +434,8 @@ async def handle_condition_completed(chunk: Any, state: StreamState, stream: Any
     step_id = getattr(chunk, "step_id", None) or step_name
     key = f"wf_cond_{step_id}"
     title = f"Condition: {step_name}"
-    selected = getattr(chunk, "selected_step", None)
-    output = f"Selected: {selected}" if selected else None
     state.complete_task(key)
-    await _emit_task(stream, key, title, "complete", output=output)
+    await _emit_task(stream, key, title, "complete")
     return "continue"
 
 
@@ -554,10 +523,6 @@ DISPATCH: dict[str, HandlerFn] = {
     # Reasoning
     RunEvent.reasoning_started.value: handle_reasoning_started,
     TeamRunEvent.reasoning_started.value: handle_reasoning_started,
-    RunEvent.reasoning_step.value: handle_reasoning_step,
-    TeamRunEvent.reasoning_step.value: handle_reasoning_step,
-    RunEvent.reasoning_content_delta.value: handle_reasoning_delta,
-    TeamRunEvent.reasoning_content_delta.value: handle_reasoning_delta,
     RunEvent.reasoning_completed.value: handle_reasoning_completed,
     TeamRunEvent.reasoning_completed.value: handle_reasoning_completed,
     # Tools
@@ -623,10 +588,6 @@ WORKFLOW_DISPATCH: dict[str, HandlerFn] = {
     # Suppress nested agent reasoning cards
     RunEvent.reasoning_started.value: handle_workflow_run_noop,
     TeamRunEvent.reasoning_started.value: handle_workflow_run_noop,
-    RunEvent.reasoning_step.value: handle_workflow_run_noop,
-    TeamRunEvent.reasoning_step.value: handle_workflow_run_noop,
-    RunEvent.reasoning_content_delta.value: handle_workflow_run_noop,
-    TeamRunEvent.reasoning_content_delta.value: handle_workflow_run_noop,
     RunEvent.reasoning_completed.value: handle_workflow_run_noop,
     TeamRunEvent.reasoning_completed.value: handle_workflow_run_noop,
     # Suppress nested agent tool cards

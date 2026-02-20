@@ -223,33 +223,38 @@ def attach_routes(
                     pass
                 return
 
-            from agno.os.interfaces.slack.stream_proxy import SplitStreamProxy
-
-            stream = SplitStreamProxy(
-                async_client,
-                state,
-                stream_kwargs={
-                    "channel": ctx["channel_id"],
-                    "thread_ts": ctx["ts"],
-                    "recipient_team_id": team_id,
-                    "recipient_user_id": user_id,
-                    "task_display_mode": task_display_mode,
-                    "buffer_size": 0,
-                },
+            stream = await async_client.chat_stream(
+                channel=ctx["channel_id"],
+                thread_ts=ctx["ts"],
+                recipient_team_id=team_id,
+                recipient_user_id=user_id,
+                task_display_mode=task_display_mode,
+                buffer_size=0,
             )
-            await stream.start()
 
             dispatch = WORKFLOW_DISPATCH if state.entity_type == "workflow" else DISPATCH
+            stream_initialized = False
             async for chunk in response_stream:
                 event_name = getattr(chunk, "event", None)
                 handler = dispatch.get(event_name) if event_name else None
                 if handler:
+                    # Lazy-start: send plan_update via startStream so all
+                    # subsequent task_update chunks go via appendStream
+                    # (Slack silently discards task_update in startStream).
+                    # Delaying until the first handler fires preserves the
+                    # setStatus typing indicator while the model thinks.
+                    if not stream_initialized:
+                        await stream.append(chunks=[{"type": "plan_update", "title": "Working..."}])
+                        stream_initialized = True
                     action = await handler(chunk, state, stream)
                     if action == "break":
                         break
 
                 # Flush text buffer when threshold reached
                 if state.text_buffer:
+                    if not stream_initialized:
+                        await stream.append(chunks=[{"type": "plan_update", "title": "Working..."}])
+                        stream_initialized = True
                     if not state.title_set:
                         title = ctx["message_text"][:50].strip() or "New conversation"
 

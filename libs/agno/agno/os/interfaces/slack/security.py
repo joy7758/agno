@@ -6,12 +6,7 @@ from typing import Optional
 
 from fastapi import HTTPException
 
-from agno.utils.log import log_error
-
-try:
-    SLACK_SIGNING_SECRET = getenv("SLACK_SIGNING_SECRET")
-except Exception as e:
-    log_error(f"Slack signin secret missing: {e}")
+SLACK_SIGNING_SECRET = getenv("SLACK_SIGNING_SECRET")
 
 
 def verify_slack_signature(

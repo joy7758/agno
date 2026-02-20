@@ -1,53 +1,8 @@
-import json
-import re
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
 
 from agno.media import Audio, File, Image, Video
 from agno.tools.slack import SlackTools
 from agno.utils.log import log_error
-
-
-def extract_sources(tool_result: str) -> list:
-    sources: list[dict] = []
-    seen_urls: set[str] = set()
-
-    def _add(url: str, text: Optional[str] = None) -> None:
-        if url in seen_urls:
-            return
-        seen_urls.add(url)
-        if not text:
-            text = urlparse(url).netloc or url
-        sources.append({"type": "url", "url": url, "text": text})
-
-    try:
-        data = json.loads(tool_result)
-        items: list = []
-        if isinstance(data, list):
-            items = data
-        elif isinstance(data, dict):
-            for key in ("results", "citations", "data", "organic"):
-                if key in data and isinstance(data[key], list):
-                    items = data[key]
-                    break
-        for item in items:
-            if isinstance(item, dict):
-                url = item.get("url") or item.get("link") or item.get("href")
-                title = item.get("title") or item.get("text") or item.get("name")
-                if url and isinstance(url, str) and url.startswith("http"):
-                    _add(url, title if isinstance(title, str) else None)
-        if sources:
-            return sources[:5]
-    except (json.JSONDecodeError, TypeError, ValueError):
-        pass
-
-    url_pattern = r"https?://[^\s<>\"')\],}]+"
-    for match in re.findall(url_pattern, tool_result):
-        _add(match.rstrip("."))
-        if len(sources) >= 5:
-            break
-
-    return sources
 
 
 def task_id(agent_name: Optional[str], base_id: str) -> str:
