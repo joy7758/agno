@@ -19,28 +19,28 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class HITLCheckResult:
-    """Result of an HITL check.
+class StepPauseResult:
+    """Result of a step pause status check.
 
     Attributes:
-        should_pause: Whether the workflow should pause for HITL.
-        step_requirement: The step requirement for any HITL type (confirmation, user input, or route selection).
+        should_pause: Whether the workflow should pause for user interaction.
+        step_requirement: The step requirement for any pause type (confirmation, user input, or route selection).
     """
 
     should_pause: bool = False
     step_requirement: Optional["StepRequirement"] = None
 
 
-def check_hitl(
+def step_pause_status(
     step: Any,
     step_index: int,
     step_input: "StepInput",
     step_type: str,
     for_route_selection: bool = False,
-) -> HITLCheckResult:
-    """Check if a workflow component requires HITL (confirmation, user input, or route selection).
+) -> StepPauseResult:
+    """Check if a workflow component requires pausing for user interaction.
 
-    This is a unified function that handles HITL checks for all component types:
+    This is a unified function that handles pause checks for all component types:
     - Step: confirmation or user input
     - Loop, Condition, Steps, Router: confirmation
     - Router: route selection (when for_route_selection=True)
@@ -53,25 +53,25 @@ def check_hitl(
         for_route_selection: If True, check for Router route selection instead of confirmation.
 
     Returns:
-        HITLCheckResult indicating whether to pause and the requirement.
+        StepPauseResult indicating whether to pause and the requirement.
     """
-    # Determine if HITL is required
+    # Determine if pause is required
     if for_route_selection:
-        requires_hitl = getattr(step, "requires_user_input", False)
-        hitl_type = "user selection"
+        requires_pause = getattr(step, "requires_user_input", False)
+        pause_type = "user selection"
     elif step_type == "Step":
-        requires_hitl = getattr(step, "requires_confirmation", False) or getattr(step, "requires_user_input", False)
-        hitl_type = "confirmation" if getattr(step, "requires_confirmation", False) else "user input"
+        requires_pause = getattr(step, "requires_confirmation", False) or getattr(step, "requires_user_input", False)
+        pause_type = "confirmation" if getattr(step, "requires_confirmation", False) else "user input"
     else:
-        requires_hitl = getattr(step, "requires_confirmation", False)
-        hitl_type = "confirmation"
+        requires_pause = getattr(step, "requires_confirmation", False)
+        pause_type = "confirmation"
 
-    if not requires_hitl:
-        return HITLCheckResult(should_pause=False)
+    if not requires_pause:
+        return StepPauseResult(should_pause=False)
 
     # Get step name with fallback
     step_name = getattr(step, "name", None) or f"{step_type.lower()}_{step_index + 1}"
-    log_debug(f"{step_type} '{step_name}' requires {hitl_type} - pausing workflow")
+    log_debug(f"{step_type} '{step_name}' requires {pause_type} - pausing workflow")
 
     # Create the requirement
     if for_route_selection:
@@ -83,7 +83,7 @@ def check_hitl(
     else:
         step_requirement = step.create_step_requirement(step_index, step_input)
 
-    return HITLCheckResult(should_pause=True, step_requirement=step_requirement)
+    return StepPauseResult(should_pause=True, step_requirement=step_requirement)
 
 
 def create_step_paused_event(
@@ -91,7 +91,7 @@ def create_step_paused_event(
     step: Any,
     step_name: str,
     step_index: int,
-    hitl_result: HITLCheckResult,
+    pause_result: StepPauseResult,
 ) -> Any:
     """Create a StepPausedEvent for streaming.
 
@@ -100,14 +100,14 @@ def create_step_paused_event(
         step: The step that triggered the pause.
         step_name: Name of the step.
         step_index: Index of the step.
-        hitl_result: The HITL check result.
+        pause_result: The step pause result.
 
     Returns:
         StepPausedEvent instance.
     """
     from agno.run.workflow import StepPausedEvent
 
-    req = hitl_result.step_requirement
+    req = pause_result.step_requirement
     return StepPausedEvent(
         run_id=workflow_run_response.run_id or "",
         workflow_name=workflow_run_response.workflow_name,
@@ -127,7 +127,7 @@ def create_router_paused_event(
     workflow_run_response: "WorkflowRunOutput",
     step_name: str,
     step_index: int,
-    hitl_result: HITLCheckResult,
+    pause_result: StepPauseResult,
 ) -> Any:
     """Create a RouterPausedEvent for streaming.
 
@@ -135,14 +135,14 @@ def create_router_paused_event(
         workflow_run_response: The workflow run output.
         step_name: Name of the router.
         step_index: Index of the router.
-        hitl_result: The HITL check result.
+        pause_result: The step pause result.
 
     Returns:
         RouterPausedEvent instance.
     """
     from agno.run.workflow import RouterPausedEvent
 
-    req = hitl_result.step_requirement
+    req = pause_result.step_requirement
     return RouterPausedEvent(
         run_id=workflow_run_response.run_id or "",
         workflow_name=workflow_run_response.workflow_name,
@@ -156,12 +156,12 @@ def create_router_paused_event(
     )
 
 
-def apply_hitl_pause_state(
+def apply_pause_state(
     workflow_run_response: "WorkflowRunOutput",
     step_index: int,
     step_name: Optional[str],
     collected_step_outputs: List[Union["StepOutput", List["StepOutput"]]],
-    hitl_result: HITLCheckResult,
+    pause_result: StepPauseResult,
 ) -> None:
     """Apply the paused state to the workflow run response.
 
@@ -170,18 +170,18 @@ def apply_hitl_pause_state(
         step_index: Index of the step that triggered the pause.
         step_name: Name of the step that triggered the pause.
         collected_step_outputs: The step outputs collected so far.
-        hitl_result: The HITL check result containing the requirement.
+        pause_result: The step pause result containing the requirement.
     """
     workflow_run_response.status = RunStatus.paused
     workflow_run_response.paused_step_index = step_index
     workflow_run_response.paused_step_name = step_name
     workflow_run_response.step_results = collected_step_outputs
 
-    if hitl_result.step_requirement:
-        workflow_run_response.step_requirements = [hitl_result.step_requirement]
+    if pause_result.step_requirement:
+        workflow_run_response.step_requirements = [pause_result.step_requirement]
 
 
-def save_hitl_paused_session(
+def save_paused_session(
     workflow: Any,
     session: "WorkflowSession",
     workflow_run_response: "WorkflowRunOutput",
@@ -198,7 +198,7 @@ def save_hitl_paused_session(
     workflow.save_session(session=session)
 
 
-async def asave_hitl_paused_session(
+async def asave_paused_session(
     workflow: Any,
     session: "WorkflowSession",
     workflow_run_response: "WorkflowRunOutput",

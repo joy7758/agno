@@ -2,22 +2,24 @@
 
 from agno.workflow.utils.hitl import (
     ContinueExecutionState,
-    apply_hitl_pause_state,
-    asave_hitl_paused_session,
-    check_hitl,
+    StepPauseResult,
+    apply_pause_state,
+    asave_paused_session,
     create_router_paused_event,
     create_step_paused_event,
     finalize_workflow_completion,
-    save_hitl_paused_session,
+    save_paused_session,
+    step_pause_status,
 )
 
 __all__ = [
     "ContinueExecutionState",
-    "apply_hitl_pause_state",
-    "asave_hitl_paused_session",
-    "check_hitl",
+    "StepPauseResult",
+    "apply_pause_state",
+    "asave_paused_session",
     "create_router_paused_event",
     "create_step_paused_event",
     "finalize_workflow_completion",
-    "save_hitl_paused_session",
+    "save_paused_session",
+    "step_pause_status",
 ]

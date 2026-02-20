@@ -102,13 +102,13 @@ from agno.workflow.types import (
 )
 from agno.workflow.utils import (
     ContinueExecutionState,
-    apply_hitl_pause_state,
-    asave_hitl_paused_session,
-    check_hitl,
+    apply_pause_state,
+    asave_paused_session,
     create_router_paused_event,
     create_step_paused_event,
     finalize_workflow_completion,
-    save_hitl_paused_session,
+    save_paused_session,
+    step_pause_status,
 )
 
 STEP_TYPE_MAPPING = {
@@ -1783,15 +1783,15 @@ class Workflow:
 
                     # Check for HITL requirements
                     step_type = STEP_TYPE_MAPPING.get(type(step), StepType.STEP).value
-                    hitl_result = check_hitl(step, i, step_input, step_type)
+                    pause_result = step_pause_status(step, i, step_input, step_type)
                     # For Router, also check route selection if confirmation didn't trigger
-                    if isinstance(step, Router) and not hitl_result.should_pause:
-                        hitl_result = check_hitl(step, i, step_input, step_type, for_route_selection=True)
+                    if isinstance(step, Router) and not pause_result.should_pause:
+                        pause_result = step_pause_status(step, i, step_input, step_type, for_route_selection=True)
 
                     # Handle HITL pause if needed
-                    if hitl_result.should_pause:
-                        apply_hitl_pause_state(workflow_run_response, i, step_name, collected_step_outputs, hitl_result)
-                        save_hitl_paused_session(self, session, workflow_run_response)
+                    if pause_result.should_pause:
+                        apply_pause_state(workflow_run_response, i, step_name, collected_step_outputs, pause_result)
+                        save_paused_session(self, session, workflow_run_response)
                         return workflow_run_response
 
                     try:
@@ -2021,26 +2021,26 @@ class Workflow:
 
                     # Check for HITL requirements
                     step_type = STEP_TYPE_MAPPING.get(type(step), StepType.STEP).value
-                    hitl_result = check_hitl(step, i, step_input, step_type)
+                    pause_result = step_pause_status(step, i, step_input, step_type)
                     # For Router, also check route selection if confirmation didn't trigger
-                    if isinstance(step, Router) and not hitl_result.should_pause:
-                        hitl_result = check_hitl(step, i, step_input, step_type, for_route_selection=True)
+                    if isinstance(step, Router) and not pause_result.should_pause:
+                        pause_result = step_pause_status(step, i, step_input, step_type, for_route_selection=True)
 
                     # Handle HITL pause if needed
-                    if hitl_result.should_pause:
-                        apply_hitl_pause_state(workflow_run_response, i, step_name, collected_step_outputs, hitl_result)
+                    if pause_result.should_pause:
+                        apply_pause_state(workflow_run_response, i, step_name, collected_step_outputs, pause_result)
 
                         # Yield appropriate event based on requirement type
-                        req = hitl_result.step_requirement
+                        req = pause_result.step_requirement
                         if req and req.requires_route_selection:
-                            paused_event = create_router_paused_event(workflow_run_response, step_name, i, hitl_result)
+                            paused_event = create_router_paused_event(workflow_run_response, step_name, i, pause_result)
                         else:
                             paused_event = create_step_paused_event(
-                                workflow_run_response, step, step_name, i, hitl_result
+                                workflow_run_response, step, step_name, i, pause_result
                             )
                         yield self._handle_event(paused_event, workflow_run_response)
 
-                        save_hitl_paused_session(self, session, workflow_run_response)
+                        save_paused_session(self, session, workflow_run_response)
                         return
 
                     # Execute step with streaming and yield all events
@@ -2493,15 +2493,15 @@ class Workflow:
 
                     # Check for HITL requirements
                     step_type = STEP_TYPE_MAPPING.get(type(step), StepType.STEP).value
-                    hitl_result = check_hitl(step, i, step_input, step_type)
+                    pause_result = step_pause_status(step, i, step_input, step_type)
                     # For Router, also check route selection if confirmation didn't trigger
-                    if isinstance(step, Router) and not hitl_result.should_pause:
-                        hitl_result = check_hitl(step, i, step_input, step_type, for_route_selection=True)
+                    if isinstance(step, Router) and not pause_result.should_pause:
+                        pause_result = step_pause_status(step, i, step_input, step_type, for_route_selection=True)
 
                     # Handle HITL pause if needed
-                    if hitl_result.should_pause:
-                        apply_hitl_pause_state(workflow_run_response, i, step_name, collected_step_outputs, hitl_result)
-                        await asave_hitl_paused_session(self, workflow_session, workflow_run_response)
+                    if pause_result.should_pause:
+                        apply_pause_state(workflow_run_response, i, step_name, collected_step_outputs, pause_result)
+                        await asave_paused_session(self, workflow_session, workflow_run_response)
                         return workflow_run_response
 
                     try:
@@ -2751,28 +2751,28 @@ class Workflow:
 
                     # Check for HITL requirements
                     step_type = STEP_TYPE_MAPPING.get(type(step), StepType.STEP).value
-                    hitl_result = check_hitl(step, i, step_input, step_type)
+                    pause_result = step_pause_status(step, i, step_input, step_type)
                     # For Router, also check route selection if confirmation didn't trigger
-                    if isinstance(step, Router) and not hitl_result.should_pause:
-                        hitl_result = check_hitl(step, i, step_input, step_type, for_route_selection=True)
+                    if isinstance(step, Router) and not pause_result.should_pause:
+                        pause_result = step_pause_status(step, i, step_input, step_type, for_route_selection=True)
 
                     # Handle HITL pause if needed
-                    if hitl_result.should_pause:
-                        apply_hitl_pause_state(workflow_run_response, i, step_name, collected_step_outputs, hitl_result)
+                    if pause_result.should_pause:
+                        apply_pause_state(workflow_run_response, i, step_name, collected_step_outputs, pause_result)
 
                         # Yield appropriate event based on requirement type
-                        req = hitl_result.step_requirement
+                        req = pause_result.step_requirement
                         if req and req.requires_route_selection:
-                            paused_event = create_router_paused_event(workflow_run_response, step_name, i, hitl_result)
+                            paused_event = create_router_paused_event(workflow_run_response, step_name, i, pause_result)
                         else:
                             paused_event = create_step_paused_event(
-                                workflow_run_response, step, step_name, i, hitl_result
+                                workflow_run_response, step, step_name, i, pause_result
                             )
                         yield self._handle_event(
                             paused_event, workflow_run_response, websocket_handler=websocket_handler
                         )
 
-                        await asave_hitl_paused_session(self, workflow_session, workflow_run_response)
+                        await asave_paused_session(self, workflow_session, workflow_run_response)
                         return
 
                     # Execute step with streaming and yield all events
