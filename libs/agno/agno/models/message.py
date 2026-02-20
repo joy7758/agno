@@ -109,8 +109,8 @@ class Message(BaseModel):
     add_to_agent_memory: bool = True
     # This flag is enabled when a message is fetched from the agent's memory.
     from_history: bool = False
-    # Metrics for the message. Only set on assistant messages from model responses.
-    metrics: Optional[Metrics] = None
+    # Metrics for the message.
+    metrics: Metrics = Field(default_factory=Metrics)
     # The references added to the message for RAG
     references: Optional[MessageReferences] = None
     # The Unix timestamp the message was created.
