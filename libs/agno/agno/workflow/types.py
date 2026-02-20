@@ -591,8 +591,13 @@ class StepRequirement:
     2. **User Input**: User provides custom input values (Step with user_input_schema)
     3. **Route Selection**: User selects which route(s) to take (Router with requires_user_input)
 
-    The `step_type` field indicates what kind of component created this requirement:
-    - "Step", "Loop", "Condition", "Steps", "Router"
+    The `step_type` field indicates what kind of component created this requirement.
+    It accepts both StepType enum values and strings for flexibility.
+
+    The `on_reject` field determines behavior when a step is rejected:
+    - OnReject.skip / "skip": Skip the step and continue workflow
+    - OnReject.cancel / "cancel": Cancel the entire workflow
+    - OnReject.else_branch / "else": For Condition only, execute else_steps
     """
 
     step_id: str
@@ -600,14 +605,16 @@ class StepRequirement:
     step_index: Optional[int] = None
 
     # Component type that created this requirement
-    step_type: Optional[str] = None  # "Step", "Loop", "Condition", "Steps", "Router"
+    # Accepts StepType enum or string for flexibility
+    step_type: Optional[Union[StepType, str]] = None
 
     # Confirmation fields (for Step, Loop, Condition, Steps, Router confirmation mode)
     requires_confirmation: bool = False
     confirmation_message: Optional[str] = None
     confirmed: Optional[bool] = None
-    # What to do when step is rejected: "skip" (skip step, continue workflow) or "cancel" (cancel workflow)
-    on_reject: str = "cancel"
+    # What to do when step is rejected
+    # Accepts OnReject enum or string for flexibility
+    on_reject: Union[OnReject, str] = OnReject.cancel
 
     # User input fields (for Step with custom input)
     requires_user_input: bool = False
@@ -767,15 +774,19 @@ class StepRequirement:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
+        # Convert enum values to strings for serialization
+        step_type_str = self.step_type.value if isinstance(self.step_type, StepType) else self.step_type
+        on_reject_str = self.on_reject.value if isinstance(self.on_reject, OnReject) else self.on_reject
+
         result: Dict[str, Any] = {
             "step_id": self.step_id,
             "step_name": self.step_name,
             "step_index": self.step_index,
-            "step_type": self.step_type,
+            "step_type": step_type_str,
             "requires_confirmation": self.requires_confirmation,
             "confirmation_message": self.confirmation_message,
             "confirmed": self.confirmed,
-            "on_reject": self.on_reject,
+            "on_reject": on_reject_str,
             "requires_user_input": self.requires_user_input,
             "user_input_message": self.user_input_message,
             "user_input": self.user_input,

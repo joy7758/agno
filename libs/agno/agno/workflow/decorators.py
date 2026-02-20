@@ -1,9 +1,11 @@
 """Decorators for workflow step configuration."""
 
-from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, TypeVar, Union
 
 F = TypeVar("F", bound=Callable)
+
+if TYPE_CHECKING:
+    from agno.workflow.types import UserInputField
 
 
 def pause(
@@ -12,7 +14,7 @@ def pause(
     confirmation_message: Optional[str] = None,
     requires_user_input: bool = False,
     user_input_message: Optional[str] = None,
-    user_input_schema: Optional[List[Dict[str, Any]]] = None,
+    user_input_schema: Optional[List[Union[Dict[str, Any], "UserInputField"]]] = None,
 ) -> Callable[[F], F]:
     """Decorator to mark a step function with Human-In-The-Loop (HITL) configuration.
 
@@ -28,7 +30,8 @@ def pause(
         requires_user_input: Whether the step requires user input before execution.
             Defaults to False.
         user_input_message: Message to display to the user when requesting input.
-        user_input_schema: Schema for user input fields. Each field is a dict with:
+        user_input_schema: Schema for user input fields. Can be a list of dicts or
+            UserInputField objects. Each field should have:
             - name: Field name (required)
             - field_type: "str", "int", "float", "bool" (default: "str")
             - description: Field description (optional)
@@ -36,42 +39,10 @@ def pause(
 
     Returns:
         A decorator that adds HITL metadata to the function.
-
-    Example:
-        ```python
-        from agno.workflow.decorators import pause
-        from agno.workflow.types import StepInput, StepOutput
-
-        # Confirmation-based HITL
-        @pause(
-            name="Delete Records",
-            requires_confirmation=True,
-            confirmation_message="About to delete records. Confirm?"
-        )
-        def delete_records(step_input: StepInput) -> StepOutput:
-            return StepOutput(content="Records deleted")
-
-        # User input-based HITL
-        @pause(
-            name="Process with Parameters",
-            requires_user_input=True,
-            user_input_message="Please provide processing parameters:",
-            user_input_schema=[
-                {"name": "threshold", "field_type": "float", "description": "Processing threshold"},
-                {"name": "mode", "field_type": "str", "description": "Processing mode (fast/accurate)"},
-            ]
-        )
-        def process_with_params(step_input: StepInput) -> StepOutput:
-            # User input is available in step_input.additional_data["user_input"]
-            user_input = step_input.additional_data.get("user_input", {})
-            threshold = user_input.get("threshold", 0.5)
-            mode = user_input.get("mode", "fast")
-            return StepOutput(content=f"Processed with threshold={threshold}, mode={mode}")
-        ```
     """
 
     def decorator(func: F) -> F:
-        # Store HITL metadata on the function
+        # Store HITL metadata directly on the function
         func._hitl_name = name  # type: ignore[attr-defined]
         func._hitl_requires_confirmation = requires_confirmation  # type: ignore[attr-defined]
         func._hitl_confirmation_message = confirmation_message  # type: ignore[attr-defined]
@@ -79,19 +50,7 @@ def pause(
         func._hitl_user_input_message = user_input_message  # type: ignore[attr-defined]
         func._hitl_user_input_schema = user_input_schema  # type: ignore[attr-defined]
 
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
-
-        # Copy HITL metadata to wrapper
-        wrapper._hitl_name = name  # type: ignore[attr-defined]
-        wrapper._hitl_requires_confirmation = requires_confirmation  # type: ignore[attr-defined]
-        wrapper._hitl_confirmation_message = confirmation_message  # type: ignore[attr-defined]
-        wrapper._hitl_requires_user_input = requires_user_input  # type: ignore[attr-defined]
-        wrapper._hitl_user_input_message = user_input_message  # type: ignore[attr-defined]
-        wrapper._hitl_user_input_schema = user_input_schema  # type: ignore[attr-defined]
-
-        return wrapper  # type: ignore[return-value]
+        return func
 
     return decorator
 

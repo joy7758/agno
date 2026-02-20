@@ -4587,23 +4587,24 @@ class Workflow:
                         original_selector = step.selector
                         step.selector = lambda _: selected_steps  # type: ignore[assignment]
 
-                        step_output = step.execute(
-                            step_input,
-                            session_id=session.session_id,
-                            user_id=self.user_id,
-                            workflow_run_response=workflow_run_response,
-                            run_context=run_context,
-                            store_executor_outputs=self.store_executor_outputs,
-                            workflow_session=session,
-                            add_workflow_history_to_steps=self.add_workflow_history_to_steps
-                            if self.add_workflow_history_to_steps
-                            else None,
-                            num_history_runs=self.num_history_runs,
-                            background_tasks=background_tasks,
-                        )
-
-                        # Restore original selector
-                        step.selector = original_selector
+                        try:
+                            step_output = step.execute(
+                                step_input,
+                                session_id=session.session_id,
+                                user_id=self.user_id,
+                                workflow_run_response=workflow_run_response,
+                                run_context=run_context,
+                                store_executor_outputs=self.store_executor_outputs,
+                                workflow_session=session,
+                                add_workflow_history_to_steps=self.add_workflow_history_to_steps
+                                if self.add_workflow_history_to_steps
+                                else None,
+                                num_history_runs=self.num_history_runs,
+                                background_tasks=background_tasks,
+                            )
+                        finally:
+                            # Restore original selector even if execution fails
+                            step.selector = original_selector
 
                     # Update tracking
                     previous_step_outputs[step_name] = step_output
@@ -4918,40 +4919,41 @@ class Workflow:
                         original_selector = step.selector
                         step.selector = lambda _: selected_steps  # type: ignore[assignment]
 
-                        router_step_output = None
-                        for event in step.execute_stream(
-                            step_input,
-                            session_id=session.session_id,
-                            user_id=self.user_id,
-                            stream_events=stream_events,
-                            stream_executor_events=self.stream_executor_events,
-                            workflow_run_response=workflow_run_response,
-                            run_context=run_context,
-                            step_index=i,
-                            store_executor_outputs=self.store_executor_outputs,
-                            workflow_session=session,
-                            add_workflow_history_to_steps=self.add_workflow_history_to_steps
-                            if self.add_workflow_history_to_steps
-                            else None,
-                            num_history_runs=self.num_history_runs,
-                            background_tasks=background_tasks,
-                        ):
-                            if isinstance(event, StepOutput):
-                                router_step_output = event
-                            elif isinstance(event, WorkflowRunOutputEvent):  # type: ignore
-                                enriched_event = self._enrich_event_with_workflow_context(
-                                    event, workflow_run_response, step_index=i, step=step
-                                )
-                                yield self._handle_event(enriched_event, workflow_run_response)  # type: ignore
-                            else:
-                                enriched_event = self._enrich_event_with_workflow_context(
-                                    event, workflow_run_response, step_index=i, step=step
-                                )
-                                if self.stream_executor_events:
+                        try:
+                            router_step_output = None
+                            for event in step.execute_stream(
+                                step_input,
+                                session_id=session.session_id,
+                                user_id=self.user_id,
+                                stream_events=stream_events,
+                                stream_executor_events=self.stream_executor_events,
+                                workflow_run_response=workflow_run_response,
+                                run_context=run_context,
+                                step_index=i,
+                                store_executor_outputs=self.store_executor_outputs,
+                                workflow_session=session,
+                                add_workflow_history_to_steps=self.add_workflow_history_to_steps
+                                if self.add_workflow_history_to_steps
+                                else None,
+                                num_history_runs=self.num_history_runs,
+                                background_tasks=background_tasks,
+                            ):
+                                if isinstance(event, StepOutput):
+                                    router_step_output = event
+                                elif isinstance(event, WorkflowRunOutputEvent):  # type: ignore
+                                    enriched_event = self._enrich_event_with_workflow_context(
+                                        event, workflow_run_response, step_index=i, step=step
+                                    )
                                     yield self._handle_event(enriched_event, workflow_run_response)  # type: ignore
-
-                        # Restore original selector
-                        step.selector = original_selector
+                                else:
+                                    enriched_event = self._enrich_event_with_workflow_context(
+                                        event, workflow_run_response, step_index=i, step=step
+                                    )
+                                    if self.stream_executor_events:
+                                        yield self._handle_event(enriched_event, workflow_run_response)  # type: ignore
+                        finally:
+                            # Restore original selector even if execution fails
+                            step.selector = original_selector
 
                         if router_step_output is None:
                             router_step_output = StepOutput(
@@ -5616,23 +5618,24 @@ class Workflow:
                         original_selector = step.selector
                         step.selector = lambda _: selected_steps  # type: ignore[assignment]
 
-                        step_output = await step.aexecute(
-                            step_input,
-                            session_id=session.session_id,
-                            user_id=self.user_id,
-                            workflow_run_response=workflow_run_response,
-                            run_context=run_context,
-                            store_executor_outputs=self.store_executor_outputs,
-                            workflow_session=session,
-                            add_workflow_history_to_steps=self.add_workflow_history_to_steps
-                            if self.add_workflow_history_to_steps
-                            else None,
-                            num_history_runs=self.num_history_runs,
-                            background_tasks=background_tasks,
-                        )
-
-                        # Restore original selector
-                        step.selector = original_selector
+                        try:
+                            step_output = await step.aexecute(
+                                step_input,
+                                session_id=session.session_id,
+                                user_id=self.user_id,
+                                workflow_run_response=workflow_run_response,
+                                run_context=run_context,
+                                store_executor_outputs=self.store_executor_outputs,
+                                workflow_session=session,
+                                add_workflow_history_to_steps=self.add_workflow_history_to_steps
+                                if self.add_workflow_history_to_steps
+                                else None,
+                                num_history_runs=self.num_history_runs,
+                                background_tasks=background_tasks,
+                            )
+                        finally:
+                            # Restore original selector even if execution fails
+                            step.selector = original_selector
 
                     # Update tracking
                     previous_step_outputs[step_name] = step_output
@@ -5936,40 +5939,41 @@ class Workflow:
                         original_selector = step.selector
                         step.selector = lambda _: selected_steps  # type: ignore[assignment]
 
-                        router_step_output = None
-                        async for event in step.aexecute_stream(
-                            step_input,
-                            session_id=session.session_id,
-                            user_id=self.user_id,
-                            stream_events=stream_events,
-                            stream_executor_events=self.stream_executor_events,
-                            workflow_run_response=workflow_run_response,
-                            run_context=run_context,
-                            step_index=i,
-                            store_executor_outputs=self.store_executor_outputs,
-                            workflow_session=session,
-                            add_workflow_history_to_steps=self.add_workflow_history_to_steps
-                            if self.add_workflow_history_to_steps
-                            else None,
-                            num_history_runs=self.num_history_runs,
-                            background_tasks=background_tasks,
-                        ):
-                            if isinstance(event, StepOutput):
-                                router_step_output = event
-                            elif isinstance(event, WorkflowRunOutputEvent):  # type: ignore
-                                enriched_event = self._enrich_event_with_workflow_context(
-                                    event, workflow_run_response, step_index=i, step=step
-                                )
-                                yield self._handle_event(enriched_event, workflow_run_response)  # type: ignore
-                            else:
-                                enriched_event = self._enrich_event_with_workflow_context(
-                                    event, workflow_run_response, step_index=i, step=step
-                                )
-                                if self.stream_executor_events:
+                        try:
+                            router_step_output = None
+                            async for event in step.aexecute_stream(
+                                step_input,
+                                session_id=session.session_id,
+                                user_id=self.user_id,
+                                stream_events=stream_events,
+                                stream_executor_events=self.stream_executor_events,
+                                workflow_run_response=workflow_run_response,
+                                run_context=run_context,
+                                step_index=i,
+                                store_executor_outputs=self.store_executor_outputs,
+                                workflow_session=session,
+                                add_workflow_history_to_steps=self.add_workflow_history_to_steps
+                                if self.add_workflow_history_to_steps
+                                else None,
+                                num_history_runs=self.num_history_runs,
+                                background_tasks=background_tasks,
+                            ):
+                                if isinstance(event, StepOutput):
+                                    router_step_output = event
+                                elif isinstance(event, WorkflowRunOutputEvent):  # type: ignore
+                                    enriched_event = self._enrich_event_with_workflow_context(
+                                        event, workflow_run_response, step_index=i, step=step
+                                    )
                                     yield self._handle_event(enriched_event, workflow_run_response)  # type: ignore
-
-                        # Restore original selector
-                        step.selector = original_selector
+                                else:
+                                    enriched_event = self._enrich_event_with_workflow_context(
+                                        event, workflow_run_response, step_index=i, step=step
+                                    )
+                                    if self.stream_executor_events:
+                                        yield self._handle_event(enriched_event, workflow_run_response)  # type: ignore
+                        finally:
+                            # Restore original selector even if execution fails
+                            step.selector = original_selector
 
                         if router_step_output is None:
                             router_step_output = StepOutput(
