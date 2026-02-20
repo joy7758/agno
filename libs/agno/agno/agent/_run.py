@@ -198,10 +198,11 @@ def handle_agent_run_paused(
     if not run_response.content:
         run_response.content = get_paused_content(run_response)
 
-    cleanup_and_store(agent, run_response=run_response, session=session, user_id=user_id)
+    # Stamp approval_id on tools before storing so the DB has the complete data.
     create_approval_from_pause(
         db=agent.db, run_response=run_response, agent_id=agent.id, agent_name=agent.name, user_id=user_id
     )
+    cleanup_and_store(agent, run_response=run_response, session=session, user_id=user_id)
 
     log_debug(f"Agent Run Paused: {run_response.run_id}", center=True, symbol="*")
 
@@ -220,11 +221,11 @@ def handle_agent_run_paused_stream(
     if not run_response.content:
         run_response.content = get_paused_content(run_response)
 
-    cleanup_and_store(agent, run_response=run_response, session=session, user_id=user_id)
-    # Create approval before building the event so the approval_id is stamped on the tool.
+    # Stamp approval_id on tools before storing so the DB has the complete data.
     create_approval_from_pause(
         db=agent.db, run_response=run_response, agent_id=agent.id, agent_name=agent.name, user_id=user_id
     )
+    cleanup_and_store(agent, run_response=run_response, session=session, user_id=user_id)
 
     # We return and await confirmation/completion for the tools that require it
     pause_event = handle_event(
@@ -257,10 +258,11 @@ async def ahandle_agent_run_paused(
     if not run_response.content:
         run_response.content = get_paused_content(run_response)
 
-    await acleanup_and_store(agent, run_response=run_response, session=session, user_id=user_id)
+    # Stamp approval_id on tools before storing so the DB has the complete data.
     await acreate_approval_from_pause(
         db=agent.db, run_response=run_response, agent_id=agent.id, agent_name=agent.name, user_id=user_id
     )
+    await acleanup_and_store(agent, run_response=run_response, session=session, user_id=user_id)
 
     log_debug(f"Agent Run Paused: {run_response.run_id}", center=True, symbol="*")
 
@@ -279,11 +281,11 @@ async def ahandle_agent_run_paused_stream(
     if not run_response.content:
         run_response.content = get_paused_content(run_response)
 
-    await acleanup_and_store(agent, run_response=run_response, session=session, user_id=user_id)
-    # Create approval before building the event so the approval_id is stamped on the tool.
+    # Stamp approval_id on tools before storing so the DB has the complete data.
     await acreate_approval_from_pause(
         db=agent.db, run_response=run_response, agent_id=agent.id, agent_name=agent.name, user_id=user_id
     )
+    await acleanup_and_store(agent, run_response=run_response, session=session, user_id=user_id)
 
     # We return and await confirmation/completion for the tools that require it
     pause_event = handle_event(
