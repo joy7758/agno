@@ -63,6 +63,7 @@ docs_knowledge = Knowledge(
         search_type=SearchType.hybrid,
         embedder=OpenAIEmbedder(id="text-embedding-3-small"),
     ),
+    contents_db=db,
 )
 
 # ---------------------------------------------------------------------------
@@ -76,6 +77,7 @@ learned_knowledge = Knowledge(
         search_type=SearchType.hybrid,
         embedder=OpenAIEmbedder(id="text-embedding-3-small"),
     ),
+    contents_db=db,
 )
 
 # ---------------------------------------------------------------------------
@@ -114,12 +116,12 @@ l5_coding_agent = Agent(
     ],
     knowledge=docs_knowledge,
     search_knowledge=True,
-    learning=LearningMachine(
-        knowledge=learned_knowledge,
-        learned_knowledge=LearnedKnowledgeConfig(
-            mode=LearningMode.AGENTIC,
-        ),
-    ),
+    # learning=LearningMachine(
+    #     knowledge=learned_knowledge,
+    #     learned_knowledge=LearnedKnowledgeConfig(
+    #         mode=LearningMode.AGENTIC,
+    #     ),
+    # ),
     enable_agentic_memory=True,
     db=db,
     add_history_to_context=True,
