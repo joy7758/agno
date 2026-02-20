@@ -493,9 +493,32 @@ class OpenAIResponses(Model):
                         call_id_value = fc_id_to_call_id[function_call_id]
                     else:
                         call_id_value = function_call_id
+                    # Normalize list content to string
+                    if isinstance(tool_result, list):
+                        tool_result = "\n".join(str(item) for item in tool_result if item is not None)
                     formatted_messages.append(
                         {"type": "function_call_output", "call_id": call_id_value, "output": tool_result}
                     )
+                elif message.tool_calls:
+                    # Gemini combined tool message: emit one output per tool call
+                    for tc in message.tool_calls:
+                        tc_id = tc.get("tool_call_id")
+                        if tc_id is None:
+                            continue
+                        tc_content = tc.get("content")
+                        if tc_content is None:
+                            tc_content = ""
+                        if isinstance(tc_content, list):
+                            tc_content = "\n".join(str(item) for item in tc_content if item is not None)
+                        elif not isinstance(tc_content, str):
+                            tc_content = str(tc_content)
+                        if isinstance(tc_id, str) and tc_id in fc_id_to_call_id:
+                            call_id_value = fc_id_to_call_id[tc_id]
+                        else:
+                            call_id_value = tc_id
+                        formatted_messages.append(
+                            {"type": "function_call_output", "call_id": call_id_value, "output": tc_content}
+                        )
             # Tool Calls
             elif message.tool_calls is not None and len(message.tool_calls) > 0:
                 # Only skip re-sending prior function_call items when we have a previous_response_id

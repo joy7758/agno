@@ -157,7 +157,39 @@ class WatsonX(Model):
         # Use compressed content for tool messages if compression is active
         if message.role == "tool" and compress_tool_results:
             message_dict["content"] = message.get_content(use_compressed_content=True)
+
+        # Normalize cross-provider tool messages (e.g., Gemini stores content as list)
+        if message.role == "tool":
+            if isinstance(message_dict.get("content"), list):
+                message_dict["content"] = "\n".join(str(item) for item in message_dict["content"] if item is not None)
+            if "tool_call_id" not in message_dict and message.tool_calls:
+                for tc in message.tool_calls:
+                    if tc.get("tool_call_id"):
+                        message_dict["tool_call_id"] = tc["tool_call_id"]
+                        break
+            message_dict.pop("tool_calls", None)
+
         return message_dict
+
+    def _format_messages(self, messages: List[Message], compress_tool_results: bool = False) -> List[Dict[str, Any]]:
+        formatted: List[Dict[str, Any]] = []
+        for m in messages:
+            if m.role == "tool" and not m.tool_call_id and m.tool_calls:
+                for tc in m.tool_calls:
+                    tc_id = tc.get("tool_call_id")
+                    if tc_id is None:
+                        continue
+                    tc_content = tc.get("content")
+                    if tc_content is None:
+                        tc_content = ""
+                    if isinstance(tc_content, list):
+                        tc_content = "\n".join(str(item) for item in tc_content if item is not None)
+                    elif not isinstance(tc_content, str):
+                        tc_content = str(tc_content)
+                    formatted.append({"role": "tool", "content": tc_content, "tool_call_id": tc_id})
+            else:
+                formatted.append(self._format_message(m, compress_tool_results))
+        return formatted
 
     def invoke(
         self,
@@ -178,7 +210,7 @@ class WatsonX(Model):
 
             client = self.get_client()
 
-            formatted_messages = [self._format_message(m, compress_tool_results) for m in messages]
+            formatted_messages = self._format_messages(messages, compress_tool_results)
             request_params = self.get_request_params(
                 response_format=response_format, tools=tools, tool_choice=tool_choice
             )
@@ -213,7 +245,7 @@ class WatsonX(Model):
                 run_response.metrics.set_time_to_first_token()
 
             client = self.get_client()
-            formatted_messages = [self._format_message(m, compress_tool_results) for m in messages]
+            formatted_messages = self._format_messages(messages, compress_tool_results)
 
             request_params = self.get_request_params(
                 response_format=response_format, tools=tools, tool_choice=tool_choice
@@ -246,7 +278,7 @@ class WatsonX(Model):
         """
         try:
             client = self.get_client()
-            formatted_messages = [self._format_message(m, compress_tool_results) for m in messages]
+            formatted_messages = self._format_messages(messages, compress_tool_results)
 
             request_params = self.get_request_params(
                 response_format=response_format, tools=tools, tool_choice=tool_choice
@@ -284,7 +316,7 @@ class WatsonX(Model):
                 run_response.metrics.set_time_to_first_token()
 
             client = self.get_client()
-            formatted_messages = [self._format_message(m, compress_tool_results) for m in messages]
+            formatted_messages = self._format_messages(messages, compress_tool_results)
 
             # Get parameters for chat
             request_params = self.get_request_params(

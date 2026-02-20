@@ -252,6 +252,17 @@ class Groq(Model):
         }
         message_dict = {k: v for k, v in message_dict.items() if v is not None}
 
+        # Normalize cross-provider tool messages (e.g., Gemini stores content as list)
+        if message.role == "tool":
+            if isinstance(message_dict.get("content"), list):
+                message_dict["content"] = "\n".join(str(item) for item in message_dict["content"] if item is not None)
+            if "tool_call_id" not in message_dict and message.tool_calls:
+                for tc in message.tool_calls:
+                    if tc.get("tool_call_id"):
+                        message_dict["tool_call_id"] = tc["tool_call_id"]
+                        break
+            message_dict.pop("tool_calls", None)
+
         if (
             message.role == "system"
             and isinstance(message.content, str)
@@ -280,6 +291,31 @@ class Groq(Model):
 
         return message_dict
 
+    def format_messages(
+        self,
+        messages: List[Message],
+        response_format: Optional[Union[Dict, Type[BaseModel]]] = None,
+        compress_tool_results: bool = False,
+    ) -> List[Dict[str, Any]]:
+        formatted: List[Dict[str, Any]] = []
+        for m in messages:
+            if m.role == "tool" and not m.tool_call_id and m.tool_calls:
+                for tc in m.tool_calls:
+                    tc_id = tc.get("tool_call_id")
+                    if tc_id is None:
+                        continue
+                    tc_content = tc.get("content")
+                    if tc_content is None:
+                        tc_content = ""
+                    if isinstance(tc_content, list):
+                        tc_content = "\n".join(str(item) for item in tc_content if item is not None)
+                    elif not isinstance(tc_content, str):
+                        tc_content = str(tc_content)
+                    formatted.append({"role": "tool", "content": tc_content, "tool_call_id": tc_id})
+            else:
+                formatted.append(self.format_message(m, response_format, compress_tool_results))
+        return formatted
+
     def invoke(
         self,
         messages: List[Message],
@@ -300,7 +336,7 @@ class Groq(Model):
             assistant_message.metrics.start_timer()
             provider_response = self.get_client().chat.completions.create(
                 model=self.id,
-                messages=[self.format_message(m, response_format, compress_tool_results) for m in messages],  # type: ignore
+                messages=self.format_messages(messages, response_format, compress_tool_results),  # type: ignore
                 **self.get_request_params(response_format=response_format, tools=tools, tool_choice=tool_choice),
             )
             assistant_message.metrics.stop_timer()
@@ -341,7 +377,7 @@ class Groq(Model):
             assistant_message.metrics.start_timer()
             response = await self.get_async_client().chat.completions.create(
                 model=self.id,
-                messages=[self.format_message(m, response_format, compress_tool_results) for m in messages],  # type: ignore
+                messages=self.format_messages(messages, response_format, compress_tool_results),  # type: ignore
                 **self.get_request_params(response_format=response_format, tools=tools, tool_choice=tool_choice),
             )
             assistant_message.metrics.stop_timer()
@@ -383,7 +419,7 @@ class Groq(Model):
 
             for chunk in self.get_client().chat.completions.create(
                 model=self.id,
-                messages=[self.format_message(m, response_format, compress_tool_results) for m in messages],  # type: ignore
+                messages=self.format_messages(messages, response_format, compress_tool_results),  # type: ignore
                 stream=True,
                 **self.get_request_params(response_format=response_format, tools=tools, tool_choice=tool_choice),
             ):
@@ -425,7 +461,7 @@ class Groq(Model):
 
             async_stream = await self.get_async_client().chat.completions.create(
                 model=self.id,
-                messages=[self.format_message(m, response_format, compress_tool_results) for m in messages],  # type: ignore
+                messages=self.format_messages(messages, response_format, compress_tool_results),  # type: ignore
                 stream=True,
                 **self.get_request_params(response_format=response_format, tools=tools, tool_choice=tool_choice),
             )
