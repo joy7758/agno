@@ -68,18 +68,23 @@ class Condition:
         When `requires_confirmation=True`, the workflow pauses before executing the condition
         and asks the user to confirm which branch to execute:
         - If user confirms: Execute the `steps` (if branch)
-        - If user rejects: Execute the `else_steps` (else branch) if provided, otherwise skip
+        - If user rejects: Behavior depends on `on_reject` setting:
+            - "else" (default): Execute `else_steps` if provided, otherwise skip
+            - "skip": Skip the entire condition (both branches)
+            - "cancel": Cancel the workflow
     """
+
+    steps: WorkflowSteps
 
     # Evaluator should only return boolean
     # Can be a callable, a bool, or a CEL expression string
+    # Defaults to True - useful when using requires_confirmation=True where the evaluator is ignored
     evaluator: Union[
         Callable[[StepInput], bool],
         Callable[[StepInput], Awaitable[bool]],
         bool,
         str,  # CEL expression
-    ]
-    steps: WorkflowSteps
+    ] = True
 
     # Steps to execute when condition is False (optional)
     else_steps: Optional[WorkflowSteps] = None
@@ -90,12 +95,15 @@ class Condition:
     # Human-in-the-loop (HITL) configuration
     # If True, the condition will pause before execution and require user confirmation
     # User confirms -> execute `steps` (if branch)
-    # User rejects -> execute `else_steps` (else branch) if provided, otherwise skip
+    # User rejects -> behavior depends on on_reject setting
     requires_confirmation: bool = False
     # Message to display to the user when requesting confirmation
     confirmation_message: Optional[str] = None
-    # What to do when condition is rejected and no else_steps: "skip" or "cancel"
-    on_reject: Union[OnReject, str] = OnReject.skip
+    # What to do when condition is rejected:
+    # - "else" (default): Execute else_steps branch if provided, otherwise skip
+    # - "skip": Skip entire condition (both branches)
+    # - "cancel": Cancel the workflow
+    on_reject: Union[OnReject, str] = OnReject.else_branch
 
     def to_dict(self) -> Dict[str, Any]:
         result: Dict[str, Any] = {
@@ -399,12 +407,17 @@ class Condition:
         add_workflow_history_to_steps: Optional[bool] = False,
         num_history_runs: int = 3,
         background_tasks: Optional[Any] = None,
+        force_else_branch: bool = False,
     ) -> StepOutput:
         """Execute the condition and its steps with sequential chaining.
 
         If condition is True, executes `steps`.
         If condition is False and `else_steps` is provided (and not empty), executes `else_steps`.
         If condition is False and no `else_steps`, returns a "not met" message.
+
+        Args:
+            force_else_branch: If True, skip condition evaluation and execute else_steps directly.
+                              Used when user rejects a Condition with on_reject="else".
         """
         log_debug(f"Condition Start: {self.name}", center=True, symbol="-")
 
@@ -412,33 +425,51 @@ class Condition:
 
         self._prepare_steps()
 
-        # Evaluate the condition
-        if run_context is not None and run_context.session_state is not None:
-            condition_result = self._evaluate_condition(step_input, session_state=run_context.session_state)
+        # If force_else_branch is set (user rejected with on_reject="else"), skip condition evaluation
+        if force_else_branch:
+            log_debug(f"Condition {self.name} force_else_branch=True, executing else branch directly")
+            if self._has_else_steps():
+                steps_to_execute = self.else_steps  # type: ignore[assignment]
+                branch = CONDITION_BRANCH_ELSE
+                log_debug(f"Condition {self.name} executing {len(steps_to_execute)} else_steps (else branch)")
+            else:
+                # No else_steps provided, skip the condition entirely
+                log_debug(f"Condition {self.name} has no else_steps - skipping condition")
+                return StepOutput(
+                    step_name=self.name,
+                    step_id=conditional_step_id,
+                    step_type=StepType.CONDITION,
+                    content=f"Condition {self.name} rejected - skipped (no else branch)",
+                    success=True,
+                )
         else:
-            condition_result = self._evaluate_condition(step_input, session_state=session_state)
+            # Evaluate the condition
+            if run_context is not None and run_context.session_state is not None:
+                condition_result = self._evaluate_condition(step_input, session_state=run_context.session_state)
+            else:
+                condition_result = self._evaluate_condition(step_input, session_state=session_state)
 
-        log_debug(f"Condition {self.name} evaluated to: {condition_result}")
+            log_debug(f"Condition {self.name} evaluated to: {condition_result}")
 
-        # Determine which steps to execute
-        if condition_result:
-            steps_to_execute = self.steps
-            branch = CONDITION_BRANCH_IF
-            log_debug(f"Condition {self.name} met, executing {len(steps_to_execute)} steps (if branch)")
-        elif self._has_else_steps():
-            steps_to_execute = self.else_steps  # type: ignore[assignment]
-            branch = CONDITION_BRANCH_ELSE
-            log_debug(f"Condition {self.name} not met, executing {len(steps_to_execute)} else_steps (else branch)")
-        else:
-            # No else_steps provided, return "not met" message
-            log_debug(f"Condition {self.name} not met, skipping {len(self.steps)} steps")
-            return StepOutput(
-                step_name=self.name,
-                step_id=conditional_step_id,
-                step_type=StepType.CONDITION,
-                content=f"Condition {self.name} not met - skipped {len(self.steps)} steps",
-                success=True,
-            )
+            # Determine which steps to execute
+            if condition_result:
+                steps_to_execute = self.steps
+                branch = CONDITION_BRANCH_IF
+                log_debug(f"Condition {self.name} met, executing {len(steps_to_execute)} steps (if branch)")
+            elif self._has_else_steps():
+                steps_to_execute = self.else_steps  # type: ignore[assignment]
+                branch = CONDITION_BRANCH_ELSE
+                log_debug(f"Condition {self.name} not met, executing {len(steps_to_execute)} else_steps (else branch)")
+            else:
+                # No else_steps provided, return "not met" message
+                log_debug(f"Condition {self.name} not met, skipping {len(self.steps)} steps")
+                return StepOutput(
+                    step_name=self.name,
+                    step_id=conditional_step_id,
+                    step_type=StepType.CONDITION,
+                    content=f"Condition {self.name} not met - skipped {len(self.steps)} steps",
+                    success=True,
+                )
 
         all_results: List[StepOutput] = []
         current_step_input = step_input
@@ -530,12 +561,17 @@ class Condition:
         add_workflow_history_to_steps: Optional[bool] = False,
         num_history_runs: int = 3,
         background_tasks: Optional[Any] = None,
+        force_else_branch: bool = False,
     ) -> Iterator[Union[WorkflowRunOutputEvent, StepOutput]]:
         """Execute the condition with streaming support.
 
         If condition is True, executes `steps`.
         If condition is False and `else_steps` is provided (and not empty), executes `else_steps`.
         If condition is False and no `else_steps`, yields completed event and returns.
+
+        Args:
+            force_else_branch: If True, skip condition evaluation and execute else_steps directly.
+                              Used when user rejects a Condition with on_reject="else".
         """
         log_debug(f"Condition Start: {self.name}", center=True, symbol="-")
 
@@ -543,54 +579,96 @@ class Condition:
 
         self._prepare_steps()
 
-        # Evaluate the condition
-        if run_context is not None and run_context.session_state is not None:
-            condition_result = self._evaluate_condition(step_input, session_state=run_context.session_state)
-        else:
-            condition_result = self._evaluate_condition(step_input, session_state=session_state)
-        log_debug(f"Condition {self.name} evaluated to: {condition_result}")
+        # If force_else_branch is set (user rejected with on_reject="else"), skip condition evaluation
+        if force_else_branch:
+            log_debug(f"Condition {self.name} force_else_branch=True, executing else branch directly")
+            condition_result = False  # For event reporting purposes
 
-        if stream_events and workflow_run_response:
-            # Yield condition started event
-            yield ConditionExecutionStartedEvent(
-                run_id=workflow_run_response.run_id or "",
-                workflow_name=workflow_run_response.workflow_name or "",
-                workflow_id=workflow_run_response.workflow_id or "",
-                session_id=workflow_run_response.session_id or "",
-                step_name=self.name,
-                step_index=step_index,
-                condition_result=condition_result,
-                step_id=conditional_step_id,
-                parent_step_id=parent_step_id,
-            )
-
-        # Determine which steps to execute
-        if condition_result:
-            steps_to_execute = self.steps
-            branch = CONDITION_BRANCH_IF
-            log_debug(f"Condition {self.name} met, executing {len(steps_to_execute)} steps (if branch)")
-        elif self._has_else_steps():
-            steps_to_execute = self.else_steps  # type: ignore[assignment]
-            branch = CONDITION_BRANCH_ELSE
-            log_debug(f"Condition {self.name} not met, executing {len(steps_to_execute)} else_steps (else branch)")
-        else:
-            # No else_steps provided, yield completed event and return
             if stream_events and workflow_run_response:
-                yield ConditionExecutionCompletedEvent(
+                # Yield condition started event (with condition_result=False since user rejected)
+                yield ConditionExecutionStartedEvent(
                     run_id=workflow_run_response.run_id or "",
                     workflow_name=workflow_run_response.workflow_name or "",
                     workflow_id=workflow_run_response.workflow_id or "",
                     session_id=workflow_run_response.session_id or "",
                     step_name=self.name,
                     step_index=step_index,
-                    condition_result=False,
-                    executed_steps=0,
-                    branch=None,
-                    step_results=[],
+                    condition_result=condition_result,
                     step_id=conditional_step_id,
                     parent_step_id=parent_step_id,
                 )
-            return
+
+            if self._has_else_steps():
+                steps_to_execute = self.else_steps  # type: ignore[assignment]
+                branch = CONDITION_BRANCH_ELSE
+                log_debug(f"Condition {self.name} executing {len(steps_to_execute)} else_steps (else branch)")
+            else:
+                # No else_steps provided, yield completed event and return
+                if stream_events and workflow_run_response:
+                    yield ConditionExecutionCompletedEvent(
+                        run_id=workflow_run_response.run_id or "",
+                        workflow_name=workflow_run_response.workflow_name or "",
+                        workflow_id=workflow_run_response.workflow_id or "",
+                        session_id=workflow_run_response.session_id or "",
+                        step_name=self.name,
+                        step_index=step_index,
+                        condition_result=False,
+                        executed_steps=0,
+                        branch=None,
+                        step_results=[],
+                        step_id=conditional_step_id,
+                        parent_step_id=parent_step_id,
+                    )
+                return
+        else:
+            # Evaluate the condition
+            if run_context is not None and run_context.session_state is not None:
+                condition_result = self._evaluate_condition(step_input, session_state=run_context.session_state)
+            else:
+                condition_result = self._evaluate_condition(step_input, session_state=session_state)
+            log_debug(f"Condition {self.name} evaluated to: {condition_result}")
+
+            if stream_events and workflow_run_response:
+                # Yield condition started event
+                yield ConditionExecutionStartedEvent(
+                    run_id=workflow_run_response.run_id or "",
+                    workflow_name=workflow_run_response.workflow_name or "",
+                    workflow_id=workflow_run_response.workflow_id or "",
+                    session_id=workflow_run_response.session_id or "",
+                    step_name=self.name,
+                    step_index=step_index,
+                    condition_result=condition_result,
+                    step_id=conditional_step_id,
+                    parent_step_id=parent_step_id,
+                )
+
+            # Determine which steps to execute
+            if condition_result:
+                steps_to_execute = self.steps
+                branch = CONDITION_BRANCH_IF
+                log_debug(f"Condition {self.name} met, executing {len(steps_to_execute)} steps (if branch)")
+            elif self._has_else_steps():
+                steps_to_execute = self.else_steps  # type: ignore[assignment]
+                branch = CONDITION_BRANCH_ELSE
+                log_debug(f"Condition {self.name} not met, executing {len(steps_to_execute)} else_steps (else branch)")
+            else:
+                # No else_steps provided, yield completed event and return
+                if stream_events and workflow_run_response:
+                    yield ConditionExecutionCompletedEvent(
+                        run_id=workflow_run_response.run_id or "",
+                        workflow_name=workflow_run_response.workflow_name or "",
+                        workflow_id=workflow_run_response.workflow_id or "",
+                        session_id=workflow_run_response.session_id or "",
+                        step_name=self.name,
+                        step_index=step_index,
+                        condition_result=False,
+                        executed_steps=0,
+                        branch=None,
+                        step_results=[],
+                        step_id=conditional_step_id,
+                        parent_step_id=parent_step_id,
+                    )
+                return
 
         all_results: List[StepOutput] = []
         current_step_input = step_input
@@ -712,12 +790,17 @@ class Condition:
         add_workflow_history_to_steps: Optional[bool] = False,
         num_history_runs: int = 3,
         background_tasks: Optional[Any] = None,
+        force_else_branch: bool = False,
     ) -> StepOutput:
         """Async execute the condition and its steps with sequential chaining.
 
         If condition is True, executes `steps`.
         If condition is False and `else_steps` is provided (and not empty), executes `else_steps`.
         If condition is False and no `else_steps`, returns a "not met" message.
+
+        Args:
+            force_else_branch: If True, skip condition evaluation and execute else_steps directly.
+                              Used when user rejects a Condition with on_reject="else".
         """
         log_debug(f"Condition Start: {self.name}", center=True, symbol="-")
 
@@ -725,32 +808,50 @@ class Condition:
 
         self._prepare_steps()
 
-        # Evaluate the condition
-        if run_context is not None and run_context.session_state is not None:
-            condition_result = await self._aevaluate_condition(step_input, session_state=run_context.session_state)
+        # If force_else_branch is set (user rejected with on_reject="else"), skip condition evaluation
+        if force_else_branch:
+            log_debug(f"Condition {self.name} force_else_branch=True, executing else branch directly")
+            if self._has_else_steps():
+                steps_to_execute = self.else_steps  # type: ignore[assignment]
+                branch = CONDITION_BRANCH_ELSE
+                log_debug(f"Condition {self.name} executing {len(steps_to_execute)} else_steps (else branch)")
+            else:
+                # No else_steps provided, skip the condition entirely
+                log_debug(f"Condition {self.name} has no else_steps - skipping condition")
+                return StepOutput(
+                    step_name=self.name,
+                    step_id=conditional_step_id,
+                    step_type=StepType.CONDITION,
+                    content=f"Condition {self.name} rejected - skipped (no else branch)",
+                    success=True,
+                )
         else:
-            condition_result = await self._aevaluate_condition(step_input, session_state=session_state)
-        log_debug(f"Condition {self.name} evaluated to: {condition_result}")
+            # Evaluate the condition
+            if run_context is not None and run_context.session_state is not None:
+                condition_result = await self._aevaluate_condition(step_input, session_state=run_context.session_state)
+            else:
+                condition_result = await self._aevaluate_condition(step_input, session_state=session_state)
+            log_debug(f"Condition {self.name} evaluated to: {condition_result}")
 
-        # Determine which steps to execute
-        if condition_result:
-            steps_to_execute = self.steps
-            branch = CONDITION_BRANCH_IF
-            log_debug(f"Condition {self.name} met, executing {len(steps_to_execute)} steps (if branch)")
-        elif self._has_else_steps():
-            steps_to_execute = self.else_steps  # type: ignore[assignment]
-            branch = CONDITION_BRANCH_ELSE
-            log_debug(f"Condition {self.name} not met, executing {len(steps_to_execute)} else_steps (else branch)")
-        else:
-            # No else_steps provided, return "not met" message
-            log_debug(f"Condition {self.name} not met, skipping {len(self.steps)} steps")
-            return StepOutput(
-                step_name=self.name,
-                step_id=conditional_step_id,
-                step_type=StepType.CONDITION,
-                content=f"Condition {self.name} not met - skipped {len(self.steps)} steps",
-                success=True,
-            )
+            # Determine which steps to execute
+            if condition_result:
+                steps_to_execute = self.steps
+                branch = CONDITION_BRANCH_IF
+                log_debug(f"Condition {self.name} met, executing {len(steps_to_execute)} steps (if branch)")
+            elif self._has_else_steps():
+                steps_to_execute = self.else_steps  # type: ignore[assignment]
+                branch = CONDITION_BRANCH_ELSE
+                log_debug(f"Condition {self.name} not met, executing {len(steps_to_execute)} else_steps (else branch)")
+            else:
+                # No else_steps provided, return "not met" message
+                log_debug(f"Condition {self.name} not met, skipping {len(self.steps)} steps")
+                return StepOutput(
+                    step_name=self.name,
+                    step_id=conditional_step_id,
+                    step_type=StepType.CONDITION,
+                    content=f"Condition {self.name} not met - skipped {len(self.steps)} steps",
+                    success=True,
+                )
 
         # Chain steps sequentially like Loop does
         all_results: List[StepOutput] = []
@@ -841,12 +942,17 @@ class Condition:
         add_workflow_history_to_steps: Optional[bool] = False,
         num_history_runs: int = 3,
         background_tasks: Optional[Any] = None,
+        force_else_branch: bool = False,
     ) -> AsyncIterator[Union[WorkflowRunOutputEvent, TeamRunOutputEvent, RunOutputEvent, StepOutput]]:
         """Async execute the condition with streaming support.
 
         If condition is True, executes `steps`.
         If condition is False and `else_steps` is provided (and not empty), executes `else_steps`.
         If condition is False and no `else_steps`, yields completed event and returns.
+
+        Args:
+            force_else_branch: If True, skip condition evaluation and execute else_steps directly.
+                              Used when user rejects a Condition with on_reject="else".
         """
         log_debug(f"Condition Start: {self.name}", center=True, symbol="-")
 
@@ -854,54 +960,96 @@ class Condition:
 
         self._prepare_steps()
 
-        # Evaluate the condition
-        if run_context is not None and run_context.session_state is not None:
-            condition_result = await self._aevaluate_condition(step_input, session_state=run_context.session_state)
-        else:
-            condition_result = await self._aevaluate_condition(step_input, session_state=session_state)
-        log_debug(f"Condition {self.name} evaluated to: {condition_result}")
+        # If force_else_branch is set (user rejected with on_reject="else"), skip condition evaluation
+        if force_else_branch:
+            log_debug(f"Condition {self.name} force_else_branch=True, executing else branch directly")
+            condition_result = False  # For event reporting purposes
 
-        if stream_events and workflow_run_response:
-            # Yield condition started event
-            yield ConditionExecutionStartedEvent(
-                run_id=workflow_run_response.run_id or "",
-                workflow_name=workflow_run_response.workflow_name or "",
-                workflow_id=workflow_run_response.workflow_id or "",
-                session_id=workflow_run_response.session_id or "",
-                step_name=self.name,
-                step_index=step_index,
-                condition_result=condition_result,
-                step_id=conditional_step_id,
-                parent_step_id=parent_step_id,
-            )
-
-        # Determine which steps to execute
-        if condition_result:
-            steps_to_execute = self.steps
-            branch = CONDITION_BRANCH_IF
-            log_debug(f"Condition {self.name} met, executing {len(steps_to_execute)} steps (if branch)")
-        elif self._has_else_steps():
-            steps_to_execute = self.else_steps  # type: ignore[assignment]
-            branch = CONDITION_BRANCH_ELSE
-            log_debug(f"Condition {self.name} not met, executing {len(steps_to_execute)} else_steps (else branch)")
-        else:
-            # No else_steps provided, yield completed event and return
             if stream_events and workflow_run_response:
-                yield ConditionExecutionCompletedEvent(
+                # Yield condition started event (with condition_result=False since user rejected)
+                yield ConditionExecutionStartedEvent(
                     run_id=workflow_run_response.run_id or "",
                     workflow_name=workflow_run_response.workflow_name or "",
                     workflow_id=workflow_run_response.workflow_id or "",
                     session_id=workflow_run_response.session_id or "",
                     step_name=self.name,
                     step_index=step_index,
-                    condition_result=False,
-                    executed_steps=0,
-                    branch=None,
-                    step_results=[],
+                    condition_result=condition_result,
                     step_id=conditional_step_id,
                     parent_step_id=parent_step_id,
                 )
-            return
+
+            if self._has_else_steps():
+                steps_to_execute = self.else_steps  # type: ignore[assignment]
+                branch = CONDITION_BRANCH_ELSE
+                log_debug(f"Condition {self.name} executing {len(steps_to_execute)} else_steps (else branch)")
+            else:
+                # No else_steps provided, yield completed event and return
+                if stream_events and workflow_run_response:
+                    yield ConditionExecutionCompletedEvent(
+                        run_id=workflow_run_response.run_id or "",
+                        workflow_name=workflow_run_response.workflow_name or "",
+                        workflow_id=workflow_run_response.workflow_id or "",
+                        session_id=workflow_run_response.session_id or "",
+                        step_name=self.name,
+                        step_index=step_index,
+                        condition_result=False,
+                        executed_steps=0,
+                        branch=None,
+                        step_results=[],
+                        step_id=conditional_step_id,
+                        parent_step_id=parent_step_id,
+                    )
+                return
+        else:
+            # Evaluate the condition
+            if run_context is not None and run_context.session_state is not None:
+                condition_result = await self._aevaluate_condition(step_input, session_state=run_context.session_state)
+            else:
+                condition_result = await self._aevaluate_condition(step_input, session_state=session_state)
+            log_debug(f"Condition {self.name} evaluated to: {condition_result}")
+
+            if stream_events and workflow_run_response:
+                # Yield condition started event
+                yield ConditionExecutionStartedEvent(
+                    run_id=workflow_run_response.run_id or "",
+                    workflow_name=workflow_run_response.workflow_name or "",
+                    workflow_id=workflow_run_response.workflow_id or "",
+                    session_id=workflow_run_response.session_id or "",
+                    step_name=self.name,
+                    step_index=step_index,
+                    condition_result=condition_result,
+                    step_id=conditional_step_id,
+                    parent_step_id=parent_step_id,
+                )
+
+            # Determine which steps to execute
+            if condition_result:
+                steps_to_execute = self.steps
+                branch = CONDITION_BRANCH_IF
+                log_debug(f"Condition {self.name} met, executing {len(steps_to_execute)} steps (if branch)")
+            elif self._has_else_steps():
+                steps_to_execute = self.else_steps  # type: ignore[assignment]
+                branch = CONDITION_BRANCH_ELSE
+                log_debug(f"Condition {self.name} not met, executing {len(steps_to_execute)} else_steps (else branch)")
+            else:
+                # No else_steps provided, yield completed event and return
+                if stream_events and workflow_run_response:
+                    yield ConditionExecutionCompletedEvent(
+                        run_id=workflow_run_response.run_id or "",
+                        workflow_name=workflow_run_response.workflow_name or "",
+                        workflow_id=workflow_run_response.workflow_id or "",
+                        session_id=workflow_run_response.session_id or "",
+                        step_name=self.name,
+                        step_index=step_index,
+                        condition_result=False,
+                        executed_steps=0,
+                        branch=None,
+                        step_results=[],
+                        step_id=conditional_step_id,
+                        parent_step_id=parent_step_id,
+                    )
+                return
 
         # Chain steps sequentially like Loop does
         all_results: List[StepOutput] = []

@@ -4307,14 +4307,29 @@ class Workflow:
 
         # Handle rejected steps based on on_reject policy
         skip_rejected_step = False
+        execute_else_branch = False  # For Condition with on_reject="else"
         if rejected_steps:
             rejected_step = rejected_steps[0]
             if rejected_step.on_reject == "skip":
                 # Skip the rejected step, continue with next step
                 skip_rejected_step = True
                 log_debug(f"Step '{rejected_step.step_name}' was rejected with on_reject='skip' - skipping step")
+            elif rejected_step.on_reject == "else":
+                # For Condition: execute else_steps branch
+                # Validate that this is actually a Condition step
+                if rejected_step.step_type != "Condition":
+                    logger.warning(
+                        f"on_reject='else' is only valid for Condition steps, but step '{rejected_step.step_name}' "
+                        f"is of type '{rejected_step.step_type}'. Treating as 'skip' instead."
+                    )
+                    skip_rejected_step = True
+                else:
+                    execute_else_branch = True
+                    log_debug(
+                        f"Condition '{rejected_step.step_name}' was rejected with on_reject='else' - executing else branch"
+                    )
             else:
-                # Cancel workflow (default behavior)
+                # Cancel workflow (default behavior for "cancel")
                 run_response.status = RunStatus.cancelled
                 run_response.content = f"Workflow cancelled: Step '{rejected_step.step_name}' was rejected"
 
@@ -4425,6 +4440,10 @@ class Workflow:
         if error_should_retry:
             kwargs["error_retry"] = True
 
+        # Store else branch flag for Condition with on_reject="else"
+        if execute_else_branch:
+            kwargs["execute_else_branch"] = True
+
         # If step was rejected with on_reject="skip" or error with skip, start from next step
         start_index = paused_step_index
         if skip_rejected_step or error_should_skip:
@@ -4502,6 +4521,48 @@ class Workflow:
                     if step_input.additional_data is None:
                         step_input.additional_data = {}
                     step_input.additional_data["user_input"] = user_input
+
+                # Handle Condition with on_reject="else" - execute else branch directly
+                execute_else_branch = kwargs.get("execute_else_branch", False)
+                if i == start_step_index and isinstance(step, Condition) and execute_else_branch:
+                    log_debug(f"Condition '{step_name}' executing else branch (user rejected with on_reject='else')")
+
+                    step_output = step.execute(
+                        step_input,
+                        session_id=session.session_id,
+                        user_id=self.user_id,
+                        workflow_run_response=workflow_run_response,
+                        run_context=run_context,
+                        store_executor_outputs=self.store_executor_outputs,
+                        workflow_session=session,
+                        add_workflow_history_to_steps=self.add_workflow_history_to_steps
+                        if self.add_workflow_history_to_steps
+                        else None,
+                        num_history_runs=self.num_history_runs,
+                        background_tasks=background_tasks,
+                        force_else_branch=True,
+                    )
+
+                    # Update tracking
+                    previous_step_outputs[step_name] = step_output
+                    collected_step_outputs.append(step_output)
+
+                    shared_images.extend(step_output.images or [])
+                    shared_videos.extend(step_output.videos or [])
+                    shared_audio.extend(step_output.audio or [])
+                    shared_files.extend(step_output.files or [])
+                    output_images.extend(step_output.images or [])
+                    output_videos.extend(step_output.videos or [])
+                    output_audio.extend(step_output.audio or [])
+                    output_files.extend(step_output.files or [])
+
+                    if step_output.stop:
+                        logger.info(f"Early termination requested by condition {step_name}")
+                        break
+
+                    # Clear execute_else_branch after using it
+                    kwargs["execute_else_branch"] = False
+                    continue
 
                 # Handle Router with user selection - execute only the selected steps
                 if i == start_step_index and isinstance(step, Router) and router_selection:
@@ -4763,6 +4824,77 @@ class Workflow:
                     if step_input.additional_data is None:
                         step_input.additional_data = {}
                     step_input.additional_data["user_input"] = user_input
+
+                # Handle Condition with on_reject="else" - execute else branch directly (streaming)
+                execute_else_branch = kwargs.get("execute_else_branch", False)
+                if i == start_step_index and isinstance(step, Condition) and execute_else_branch:
+                    log_debug(
+                        f"Condition '{step_name}' executing else branch (streaming, user rejected with on_reject='else')"
+                    )
+
+                    condition_step_output: Optional[StepOutput] = None
+                    for event in step.execute_stream(
+                        step_input,
+                        session_id=session.session_id,
+                        user_id=self.user_id,
+                        stream_events=stream_events,
+                        stream_executor_events=self.stream_executor_events,
+                        workflow_run_response=workflow_run_response,
+                        run_context=run_context,
+                        step_index=i,
+                        store_executor_outputs=self.store_executor_outputs,
+                        workflow_session=session,
+                        add_workflow_history_to_steps=self.add_workflow_history_to_steps
+                        if self.add_workflow_history_to_steps
+                        else None,
+                        num_history_runs=self.num_history_runs,
+                        background_tasks=background_tasks,
+                        force_else_branch=True,
+                    ):
+                        if isinstance(event, StepOutput):
+                            condition_step_output = event
+                        elif isinstance(event, WorkflowRunOutputEvent):  # type: ignore
+                            enriched_event = self._enrich_event_with_workflow_context(
+                                event, workflow_run_response, step_index=i, step=step
+                            )
+                            yield self._handle_event(enriched_event, workflow_run_response)  # type: ignore
+                        else:
+                            enriched_event = self._enrich_event_with_workflow_context(
+                                event, workflow_run_response, step_index=i, step=step
+                            )
+                            if self.stream_executor_events:
+                                yield self._handle_event(enriched_event, workflow_run_response)  # type: ignore
+
+                    if condition_step_output is None:
+                        condition_step_output = StepOutput(
+                            step_name=step_name,
+                            step_id=str(uuid4()),
+                            step_type=StepType.CONDITION,
+                            content=f"Condition {step_name} completed (else branch)",
+                            success=True,
+                        )
+
+                    # Update tracking
+                    previous_step_outputs[step_name] = condition_step_output
+                    collected_step_outputs.append(condition_step_output)
+
+                    shared_images.extend(condition_step_output.images or [])
+                    shared_videos.extend(condition_step_output.videos or [])
+                    shared_audio.extend(condition_step_output.audio or [])
+                    shared_files.extend(condition_step_output.files or [])
+                    output_images.extend(condition_step_output.images or [])
+                    output_videos.extend(condition_step_output.videos or [])
+                    output_audio.extend(condition_step_output.audio or [])
+                    output_files.extend(condition_step_output.files or [])
+
+                    if condition_step_output.stop:
+                        logger.info(f"Early termination requested by condition {step_name}")
+                        early_termination = True
+                        break
+
+                    # Clear execute_else_branch after using it
+                    kwargs["execute_else_branch"] = False
+                    continue
 
                 # Handle Router with user selection - execute only the selected steps (streaming)
                 if i == start_step_index and isinstance(step, Router) and router_selection:
@@ -5204,14 +5336,29 @@ class Workflow:
 
         # Handle rejected steps based on on_reject policy
         skip_rejected_step = False
+        execute_else_branch = False  # For Condition with on_reject="else"
         if rejected_steps:
             rejected_step = rejected_steps[0]
             if rejected_step.on_reject == "skip":
                 # Skip the rejected step, continue with next step
                 skip_rejected_step = True
                 log_debug(f"Step '{rejected_step.step_name}' was rejected with on_reject='skip' - skipping step")
+            elif rejected_step.on_reject == "else":
+                # For Condition: execute else_steps branch
+                # Validate that this is actually a Condition step
+                if rejected_step.step_type != "Condition":
+                    logger.warning(
+                        f"on_reject='else' is only valid for Condition steps, but step '{rejected_step.step_name}' "
+                        f"is of type '{rejected_step.step_type}'. Treating as 'skip' instead."
+                    )
+                    skip_rejected_step = True
+                else:
+                    execute_else_branch = True
+                    log_debug(
+                        f"Condition '{rejected_step.step_name}' was rejected with on_reject='else' - executing else branch"
+                    )
             else:
-                # Cancel workflow (default behavior)
+                # Cancel workflow (default behavior for "cancel")
                 run_response.status = RunStatus.cancelled
                 run_response.content = f"Workflow cancelled: Step '{rejected_step.step_name}' was rejected"
 
@@ -5322,6 +5469,10 @@ class Workflow:
         if error_should_retry:
             kwargs["error_retry"] = True
 
+        # Store else branch flag for Condition with on_reject="else"
+        if execute_else_branch:
+            kwargs["execute_else_branch"] = True
+
         # Determine start index based on skip decisions
         # If error skip or reject skip, start from next step
         start_index = paused_step_index + 1 if (skip_rejected_step or error_should_skip) else paused_step_index
@@ -5400,6 +5551,48 @@ class Workflow:
                     step_input.additional_data["user_input"] = user_input
 
                 await araise_if_cancelled(workflow_run_response.run_id)  # type: ignore
+
+                # Handle Condition with on_reject="else" - execute else branch directly (async)
+                execute_else_branch = kwargs.get("execute_else_branch", False)
+                if i == start_step_index and isinstance(step, Condition) and execute_else_branch:
+                    log_debug(f"Condition '{step_name}' executing else branch (user rejected with on_reject='else')")
+
+                    step_output = await step.aexecute(
+                        step_input,
+                        session_id=session.session_id,
+                        user_id=self.user_id,
+                        workflow_run_response=workflow_run_response,
+                        run_context=run_context,
+                        store_executor_outputs=self.store_executor_outputs,
+                        workflow_session=session,
+                        add_workflow_history_to_steps=self.add_workflow_history_to_steps
+                        if self.add_workflow_history_to_steps
+                        else None,
+                        num_history_runs=self.num_history_runs,
+                        background_tasks=background_tasks,
+                        force_else_branch=True,
+                    )
+
+                    # Update tracking
+                    previous_step_outputs[step_name] = step_output
+                    collected_step_outputs.append(step_output)
+
+                    shared_images.extend(step_output.images or [])
+                    shared_videos.extend(step_output.videos or [])
+                    shared_audio.extend(step_output.audio or [])
+                    shared_files.extend(step_output.files or [])
+                    output_images.extend(step_output.images or [])
+                    output_videos.extend(step_output.videos or [])
+                    output_audio.extend(step_output.audio or [])
+                    output_files.extend(step_output.files or [])
+
+                    if step_output.stop:
+                        logger.info(f"Early termination requested by condition {step_name}")
+                        break
+
+                    # Clear execute_else_branch after using it
+                    kwargs["execute_else_branch"] = False
+                    continue
 
                 # Handle Router with user selection - execute only the selected steps (async)
                 if i == start_step_index and isinstance(step, Router) and router_selection:
@@ -5647,6 +5840,77 @@ class Workflow:
                     if step_input.additional_data is None:
                         step_input.additional_data = {}
                     step_input.additional_data["user_input"] = user_input
+
+                # Handle Condition with on_reject="else" - execute else branch directly (async streaming)
+                execute_else_branch = kwargs.get("execute_else_branch", False)
+                if i == start_step_index and isinstance(step, Condition) and execute_else_branch:
+                    log_debug(
+                        f"Condition '{step_name}' executing else branch (async streaming, user rejected with on_reject='else')"
+                    )
+
+                    condition_step_output: Optional[StepOutput] = None
+                    async for event in step.aexecute_stream(
+                        step_input,
+                        session_id=session.session_id,
+                        user_id=self.user_id,
+                        stream_events=stream_events,
+                        stream_executor_events=self.stream_executor_events,
+                        workflow_run_response=workflow_run_response,
+                        run_context=run_context,
+                        step_index=i,
+                        store_executor_outputs=self.store_executor_outputs,
+                        workflow_session=session,
+                        add_workflow_history_to_steps=self.add_workflow_history_to_steps
+                        if self.add_workflow_history_to_steps
+                        else None,
+                        num_history_runs=self.num_history_runs,
+                        background_tasks=background_tasks,
+                        force_else_branch=True,
+                    ):
+                        if isinstance(event, StepOutput):
+                            condition_step_output = event
+                        elif isinstance(event, WorkflowRunOutputEvent):  # type: ignore
+                            enriched_event = self._enrich_event_with_workflow_context(
+                                event, workflow_run_response, step_index=i, step=step
+                            )
+                            yield self._handle_event(enriched_event, workflow_run_response)  # type: ignore
+                        else:
+                            enriched_event = self._enrich_event_with_workflow_context(
+                                event, workflow_run_response, step_index=i, step=step
+                            )
+                            if self.stream_executor_events:
+                                yield self._handle_event(enriched_event, workflow_run_response)  # type: ignore
+
+                    if condition_step_output is None:
+                        condition_step_output = StepOutput(
+                            step_name=step_name,
+                            step_id=str(uuid4()),
+                            step_type=StepType.CONDITION,
+                            content=f"Condition {step_name} completed (else branch)",
+                            success=True,
+                        )
+
+                    # Update tracking
+                    previous_step_outputs[step_name] = condition_step_output
+                    collected_step_outputs.append(condition_step_output)
+
+                    shared_images.extend(condition_step_output.images or [])
+                    shared_videos.extend(condition_step_output.videos or [])
+                    shared_audio.extend(condition_step_output.audio or [])
+                    shared_files.extend(condition_step_output.files or [])
+                    output_images.extend(condition_step_output.images or [])
+                    output_videos.extend(condition_step_output.videos or [])
+                    output_audio.extend(condition_step_output.audio or [])
+                    output_files.extend(condition_step_output.files or [])
+
+                    if condition_step_output.stop:
+                        logger.info(f"Early termination requested by condition {step_name}")
+                        early_termination = True
+                        break
+
+                    # Clear execute_else_branch after using it
+                    kwargs["execute_else_branch"] = False
+                    continue
 
                 # Handle Router with user selection - execute only the selected steps (async streaming)
                 if i == start_step_index and isinstance(step, Router) and router_selection:

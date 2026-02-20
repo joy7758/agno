@@ -784,3 +784,519 @@ class TestUserInputField:
         assert field.description == "Your preference"
         assert field.required is True
         assert field.value == "fast"
+
+
+# =============================================================================
+# Condition on_reject Tests
+# =============================================================================
+
+
+class TestConditionOnReject:
+    """Tests for Condition on_reject behavior (else, skip, cancel)."""
+
+    def test_condition_on_reject_else_default(self):
+        """Test that Condition defaults to on_reject='else'."""
+        from agno.workflow.condition import Condition
+        from agno.workflow.types import OnReject
+
+        condition = Condition(
+            name="test_condition",
+            steps=[Step(name="if_step", executor=fetch_data)],
+            else_steps=[Step(name="else_step", executor=save_data)],
+            requires_confirmation=True,
+        )
+
+        assert condition.on_reject == OnReject.else_branch
+
+    def test_condition_on_reject_skip(self):
+        """Test Condition with on_reject='skip'."""
+        from agno.workflow.condition import Condition
+        from agno.workflow.types import OnReject
+
+        condition = Condition(
+            name="test_condition",
+            steps=[Step(name="if_step", executor=fetch_data)],
+            else_steps=[Step(name="else_step", executor=save_data)],
+            requires_confirmation=True,
+            on_reject=OnReject.skip,
+        )
+
+        assert condition.on_reject == OnReject.skip
+
+    def test_condition_on_reject_cancel(self):
+        """Test Condition with on_reject='cancel'."""
+        from agno.workflow.condition import Condition
+        from agno.workflow.types import OnReject
+
+        condition = Condition(
+            name="test_condition",
+            steps=[Step(name="if_step", executor=fetch_data)],
+            requires_confirmation=True,
+            on_reject=OnReject.cancel,
+        )
+
+        assert condition.on_reject == OnReject.cancel
+
+    def test_condition_create_step_requirement_on_reject_else(self):
+        """Test that create_step_requirement includes on_reject='else'."""
+        from agno.workflow.condition import Condition
+        from agno.workflow.types import OnReject
+
+        condition = Condition(
+            name="test_condition",
+            steps=[Step(name="if_step", executor=fetch_data)],
+            else_steps=[Step(name="else_step", executor=save_data)],
+            requires_confirmation=True,
+            on_reject=OnReject.else_branch,
+        )
+
+        step_input = StepInput(input="test")
+        req = condition.create_step_requirement(0, step_input)
+
+        assert req.step_type == "Condition"
+        assert req.on_reject == "else"
+        assert req.requires_confirmation is True
+
+    def test_condition_create_step_requirement_on_reject_skip(self):
+        """Test that create_step_requirement includes on_reject='skip'."""
+        from agno.workflow.condition import Condition
+        from agno.workflow.types import OnReject
+
+        condition = Condition(
+            name="test_condition",
+            steps=[Step(name="if_step", executor=fetch_data)],
+            requires_confirmation=True,
+            on_reject=OnReject.skip,
+        )
+
+        step_input = StepInput(input="test")
+        req = condition.create_step_requirement(0, step_input)
+
+        assert req.step_type == "Condition"
+        assert req.on_reject == "skip"
+
+    def test_condition_create_step_requirement_on_reject_cancel(self):
+        """Test that create_step_requirement includes on_reject='cancel'."""
+        from agno.workflow.condition import Condition
+        from agno.workflow.types import OnReject
+
+        condition = Condition(
+            name="test_condition",
+            steps=[Step(name="if_step", executor=fetch_data)],
+            requires_confirmation=True,
+            on_reject=OnReject.cancel,
+        )
+
+        step_input = StepInput(input="test")
+        req = condition.create_step_requirement(0, step_input)
+
+        assert req.step_type == "Condition"
+        assert req.on_reject == "cancel"
+
+    def test_condition_evaluator_defaults_to_true(self):
+        """Test that Condition evaluator defaults to True."""
+        from agno.workflow.condition import Condition
+
+        # Should not need to specify evaluator when using requires_confirmation
+        condition = Condition(
+            name="test_condition",
+            steps=[Step(name="if_step", executor=fetch_data)],
+            requires_confirmation=True,
+        )
+
+        assert condition.evaluator is True
+
+    def test_condition_force_else_branch_with_else_steps(self):
+        """Test Condition.execute with force_else_branch=True when else_steps exist."""
+        from agno.workflow.condition import Condition
+
+        def if_step_func(step_input: StepInput) -> StepOutput:
+            return StepOutput(content="IF branch executed")
+
+        def else_step_func(step_input: StepInput) -> StepOutput:
+            return StepOutput(content="ELSE branch executed")
+
+        condition = Condition(
+            name="test_condition",
+            steps=[Step(name="if_step", executor=if_step_func)],
+            else_steps=[Step(name="else_step", executor=else_step_func)],
+        )
+
+        step_input = StepInput(input="test")
+        result = condition.execute(step_input, force_else_branch=True)
+
+        # Should execute else branch
+        assert "else branch" in result.content.lower()
+        assert result.success is True
+
+    def test_condition_force_else_branch_without_else_steps(self):
+        """Test Condition.execute with force_else_branch=True when no else_steps."""
+        from agno.workflow.condition import Condition
+
+        def if_step_func(step_input: StepInput) -> StepOutput:
+            return StepOutput(content="IF branch executed")
+
+        condition = Condition(
+            name="test_condition",
+            steps=[Step(name="if_step", executor=if_step_func)],
+            # No else_steps
+        )
+
+        step_input = StepInput(input="test")
+        result = condition.execute(step_input, force_else_branch=True)
+
+        # Should skip since no else_steps
+        assert "skipped" in result.content.lower() or "no else branch" in result.content.lower()
+        assert result.success is True
+
+    def test_condition_normal_execution_if_branch(self):
+        """Test Condition normal execution takes if branch when evaluator is True."""
+        from agno.workflow.condition import Condition
+
+        def if_step_func(step_input: StepInput) -> StepOutput:
+            return StepOutput(content="IF branch executed")
+
+        def else_step_func(step_input: StepInput) -> StepOutput:
+            return StepOutput(content="ELSE branch executed")
+
+        condition = Condition(
+            name="test_condition",
+            evaluator=True,
+            steps=[Step(name="if_step", executor=if_step_func)],
+            else_steps=[Step(name="else_step", executor=else_step_func)],
+        )
+
+        step_input = StepInput(input="test")
+        result = condition.execute(step_input, force_else_branch=False)
+
+        # Should execute if branch
+        assert "if branch" in result.content.lower()
+
+    def test_condition_normal_execution_else_branch(self):
+        """Test Condition normal execution takes else branch when evaluator is False."""
+        from agno.workflow.condition import Condition
+
+        def if_step_func(step_input: StepInput) -> StepOutput:
+            return StepOutput(content="IF branch executed")
+
+        def else_step_func(step_input: StepInput) -> StepOutput:
+            return StepOutput(content="ELSE branch executed")
+
+        condition = Condition(
+            name="test_condition",
+            evaluator=False,
+            steps=[Step(name="if_step", executor=if_step_func)],
+            else_steps=[Step(name="else_step", executor=else_step_func)],
+        )
+
+        step_input = StepInput(input="test")
+        result = condition.execute(step_input, force_else_branch=False)
+
+        # Should execute else branch
+        assert "else branch" in result.content.lower()
+
+    def test_condition_to_dict_includes_on_reject(self):
+        """Test that Condition.to_dict includes on_reject field."""
+        from agno.workflow.condition import Condition
+        from agno.workflow.types import OnReject
+
+        condition = Condition(
+            name="test_condition",
+            steps=[Step(name="if_step", executor=fetch_data)],
+            requires_confirmation=True,
+            on_reject=OnReject.else_branch,
+        )
+
+        data = condition.to_dict()
+
+        assert "on_reject" in data
+        assert data["on_reject"] == "OnReject.else_branch" or data["on_reject"] == "else"
+
+    def test_condition_from_dict_restores_on_reject(self):
+        """Test that Condition.from_dict restores on_reject field."""
+        from agno.workflow.condition import Condition
+        from agno.workflow.types import OnReject
+
+        data = {
+            "type": "Condition",
+            "name": "test_condition",
+            "evaluator": True,
+            "evaluator_type": "bool",
+            "steps": [],
+            "else_steps": [],
+            "requires_confirmation": True,
+            "on_reject": "skip",
+        }
+
+        condition = Condition.from_dict(data)
+
+        assert condition.on_reject == "skip" or condition.on_reject == OnReject.skip
+
+    def test_step_requirement_on_reject_else_only_for_condition(self):
+        """Test that on_reject='else' is validated for Condition step type."""
+        # Create a StepRequirement with on_reject='else' but non-Condition type
+        req = StepRequirement(
+            step_id="step-1",
+            step_name="regular_step",
+            step_index=0,
+            step_type="Step",  # Not a Condition
+            requires_confirmation=True,
+            on_reject="else",  # This should be invalid for non-Condition
+        )
+
+        # The requirement can be created, but workflow.py should warn/fallback
+        assert req.on_reject == "else"
+        assert req.step_type == "Step"
+
+
+class TestConditionOnRejectWorkflowIntegration:
+    """Integration tests for Condition on_reject with Workflow."""
+
+    def test_condition_on_reject_else_executes_else_branch(self):
+        """Test that rejecting a Condition with on_reject='else' executes else_steps."""
+        from agno.db.sqlite import SqliteDb
+        from agno.workflow.condition import Condition
+        from agno.workflow.types import OnReject
+        from agno.workflow.workflow import Workflow
+
+        def if_step_func(step_input: StepInput) -> StepOutput:
+            return StepOutput(content="IF branch executed")
+
+        def else_step_func(step_input: StepInput) -> StepOutput:
+            return StepOutput(content="ELSE branch executed")
+
+        def final_step_func(step_input: StepInput) -> StepOutput:
+            previous = step_input.previous_step_content or "nothing"
+            return StepOutput(content=f"Final step. Previous: {previous}")
+
+        condition = Condition(
+            name="user_choice",
+            steps=[Step(name="if_step", executor=if_step_func)],
+            else_steps=[Step(name="else_step", executor=else_step_func)],
+            requires_confirmation=True,
+            on_reject=OnReject.else_branch,
+        )
+
+        workflow = Workflow(
+            name="test_workflow",
+            steps=[condition, Step(name="final_step", executor=final_step_func)],
+            db=SqliteDb(db_file="tmp/test_condition_on_reject.db"),
+        )
+
+        # Run workflow - should pause at condition
+        run_output = workflow.run("test input")
+        assert run_output.is_paused
+        assert len(run_output.steps_requiring_confirmation) == 1
+
+        req = run_output.steps_requiring_confirmation[0]
+        assert req.step_name == "user_choice"
+        assert req.on_reject == "else"
+
+        # Reject the condition
+        req.reject()
+
+        # Continue the workflow
+        run_output = workflow.continue_run(run_output)
+
+        # Should complete and else branch should have been executed
+        assert run_output.status == RunStatus.completed
+        # The final step should have received content from else_step
+        assert "ELSE branch executed" in str(run_output.content) or any(
+            "ELSE branch executed" in str(r.content) for r in (run_output.step_results or [])
+        )
+
+    def test_condition_on_reject_skip_skips_entire_condition(self):
+        """Test that rejecting a Condition with on_reject='skip' skips both branches."""
+        from agno.db.sqlite import SqliteDb
+        from agno.workflow.condition import Condition
+        from agno.workflow.types import OnReject
+        from agno.workflow.workflow import Workflow
+
+        def setup_step_func(step_input: StepInput) -> StepOutput:
+            return StepOutput(content="Setup complete")
+
+        def if_step_func(step_input: StepInput) -> StepOutput:
+            return StepOutput(content="IF branch executed")
+
+        def else_step_func(step_input: StepInput) -> StepOutput:
+            return StepOutput(content="ELSE branch executed")
+
+        def final_step_func(step_input: StepInput) -> StepOutput:
+            previous = step_input.previous_step_content or "nothing"
+            return StepOutput(content=f"Final step. Previous: {previous}")
+
+        condition = Condition(
+            name="skippable_condition",
+            steps=[Step(name="if_step", executor=if_step_func)],
+            else_steps=[Step(name="else_step", executor=else_step_func)],
+            requires_confirmation=True,
+            on_reject=OnReject.skip,
+        )
+
+        workflow = Workflow(
+            name="test_workflow",
+            steps=[
+                Step(name="setup_step", executor=setup_step_func),
+                condition,
+                Step(name="final_step", executor=final_step_func),
+            ],
+            db=SqliteDb(db_file="tmp/test_condition_skip.db"),
+        )
+
+        # Run workflow - should pause at condition
+        run_output = workflow.run("test input")
+        assert run_output.is_paused
+
+        req = run_output.steps_requiring_confirmation[0]
+        assert req.on_reject == "skip"
+
+        # Reject the condition
+        req.reject()
+
+        # Continue the workflow
+        run_output = workflow.continue_run(run_output)
+
+        # Should complete
+        assert run_output.status == RunStatus.completed
+
+        # Neither if nor else branch should have executed
+        step_names = [r.step_name for r in (run_output.step_results or [])]
+        assert "if_step" not in step_names
+        assert "else_step" not in step_names
+
+        # final_step should have "Setup complete" as previous (skipped condition)
+        assert "Setup complete" in str(run_output.content)
+
+    def test_condition_on_reject_cancel_cancels_workflow(self):
+        """Test that rejecting a Condition with on_reject='cancel' cancels the workflow."""
+        from agno.db.sqlite import SqliteDb
+        from agno.workflow.condition import Condition
+        from agno.workflow.types import OnReject
+        from agno.workflow.workflow import Workflow
+
+        def if_step_func(step_input: StepInput) -> StepOutput:
+            return StepOutput(content="IF branch executed")
+
+        condition = Condition(
+            name="critical_condition",
+            steps=[Step(name="if_step", executor=if_step_func)],
+            requires_confirmation=True,
+            on_reject=OnReject.cancel,
+        )
+
+        workflow = Workflow(
+            name="test_workflow",
+            steps=[condition],
+            db=SqliteDb(db_file="tmp/test_condition_cancel.db"),
+        )
+
+        # Run workflow - should pause at condition
+        run_output = workflow.run("test input")
+        assert run_output.is_paused
+
+        req = run_output.steps_requiring_confirmation[0]
+        assert req.on_reject == "cancel"
+
+        # Reject the condition
+        req.reject()
+
+        # Continue the workflow
+        run_output = workflow.continue_run(run_output)
+
+        # Should be cancelled
+        assert run_output.status == RunStatus.cancelled
+        assert "rejected" in str(run_output.content).lower() or "cancelled" in str(run_output.content).lower()
+
+    def test_condition_confirm_executes_if_branch(self):
+        """Test that confirming a Condition executes the if branch."""
+        from agno.db.sqlite import SqliteDb
+        from agno.workflow.condition import Condition
+        from agno.workflow.types import OnReject
+        from agno.workflow.workflow import Workflow
+
+        def if_step_func(step_input: StepInput) -> StepOutput:
+            return StepOutput(content="IF branch executed")
+
+        def else_step_func(step_input: StepInput) -> StepOutput:
+            return StepOutput(content="ELSE branch executed")
+
+        condition = Condition(
+            name="user_choice",
+            steps=[Step(name="if_step", executor=if_step_func)],
+            else_steps=[Step(name="else_step", executor=else_step_func)],
+            requires_confirmation=True,
+            on_reject=OnReject.else_branch,
+        )
+
+        workflow = Workflow(
+            name="test_workflow",
+            steps=[condition],
+            db=SqliteDb(db_file="tmp/test_condition_confirm.db"),
+        )
+
+        # Run workflow - should pause at condition
+        run_output = workflow.run("test input")
+        assert run_output.is_paused
+
+        req = run_output.steps_requiring_confirmation[0]
+
+        # Confirm the condition
+        req.confirm()
+
+        # Continue the workflow
+        run_output = workflow.continue_run(run_output)
+
+        # Should complete and if branch should have been executed
+        assert run_output.status == RunStatus.completed
+        # Check if_step was executed
+        step_contents = [str(r.content) for r in (run_output.step_results or [])]
+        assert any("IF branch executed" in c for c in step_contents) or "if branch" in str(run_output.content).lower()
+
+    def test_condition_on_reject_else_no_else_steps_skips(self):
+        """Test on_reject='else' with no else_steps skips the condition."""
+        from agno.db.sqlite import SqliteDb
+        from agno.workflow.condition import Condition
+        from agno.workflow.types import OnReject
+        from agno.workflow.workflow import Workflow
+
+        def if_step_func(step_input: StepInput) -> StepOutput:
+            return StepOutput(content="IF branch executed")
+
+        def final_step_func(step_input: StepInput) -> StepOutput:
+            return StepOutput(content="Final step executed")
+
+        condition = Condition(
+            name="no_else_condition",
+            steps=[Step(name="if_step", executor=if_step_func)],
+            # No else_steps!
+            requires_confirmation=True,
+            on_reject=OnReject.else_branch,
+        )
+
+        workflow = Workflow(
+            name="test_workflow",
+            steps=[condition, Step(name="final_step", executor=final_step_func)],
+            db=SqliteDb(db_file="tmp/test_condition_no_else.db"),
+        )
+
+        # Run workflow - should pause at condition
+        run_output = workflow.run("test input")
+        assert run_output.is_paused
+
+        req = run_output.steps_requiring_confirmation[0]
+
+        # Reject the condition (with on_reject='else' but no else_steps)
+        req.reject()
+
+        # Continue the workflow
+        run_output = workflow.continue_run(run_output)
+
+        # Should complete - condition should be skipped since no else_steps
+        assert run_output.status == RunStatus.completed
+
+        # if_step should NOT have executed
+        step_names = [r.step_name for r in (run_output.step_results or [])]
+        assert "if_step" not in step_names
+
+        # final_step should have executed
+        assert "final_step" in step_names or "Final step executed" in str(run_output.content)

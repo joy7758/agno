@@ -22,10 +22,12 @@ class OnReject(str, Enum):
     Attributes:
         skip: Skip the rejected step and continue with the next step in the workflow.
         cancel: Cancel the entire workflow when the step is rejected.
+        else_branch: For Condition only - execute the else_steps branch when rejected.
     """
 
     skip = "skip"
     cancel = "cancel"
+    else_branch = "else"
 
 
 class OnError(str, Enum):
