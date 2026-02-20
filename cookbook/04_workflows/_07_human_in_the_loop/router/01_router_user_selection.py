@@ -146,7 +146,7 @@ if __name__ == "__main__":
     while run_output.is_paused:
         # Handle Router requirements (user selection)
         # with requires_route_selection=True
-        for requirement in run_output.steps_requiring_route_selection:
+        for requirement in run_output.steps_requiring_route:
             print(f"\n[DECISION POINT] Router: {requirement.step_name}")
             print(f"[HITL] {requirement.user_input_message}")
 

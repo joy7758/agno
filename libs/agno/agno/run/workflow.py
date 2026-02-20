@@ -623,7 +623,7 @@ class WorkflowRunOutput:
         return [req for req in self.step_requirements if req.needs_user_input]
 
     @property
-    def steps_requiring_route_selection(self) -> List["StepRequirement"]:
+    def steps_requiring_route(self) -> List["StepRequirement"]:
         """Get step requirements that need route selection (Router HITL)"""
         if not self.step_requirements:
             return []
