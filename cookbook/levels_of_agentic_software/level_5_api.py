@@ -56,6 +56,7 @@ db = PostgresDb(db_url=db_url)
 # Knowledge: Static docs (PgVector for production)
 # ---------------------------------------------------------------------------
 docs_knowledge = Knowledge(
+    name="L5 Coding Agent Knowledge",
     vector_db=PgVector(
         db_url=db_url,
         table_name="coding_standards",
@@ -68,6 +69,7 @@ docs_knowledge = Knowledge(
 # Knowledge: Dynamic learnings (PgVector for production)
 # ---------------------------------------------------------------------------
 learned_knowledge = Knowledge(
+    name="L5 Coding Agent Learnings",
     vector_db=PgVector(
         db_url=db_url,
         table_name="coding_learnings",
