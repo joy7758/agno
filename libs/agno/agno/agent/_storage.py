@@ -9,7 +9,6 @@ from typing import (
     Dict,
     List,
     Optional,
-    Tuple,
     Type,
     Union,
     cast,
@@ -315,76 +314,7 @@ def update_session_metrics(agent: Agent, session: AgentSession, run_response: Ru
     if session_metrics is None:
         return
     if run_response.metrics is not None:
-        run_metrics = run_response.metrics
-        # Accumulate token metrics
-        session_metrics.input_tokens += run_metrics.input_tokens
-        session_metrics.output_tokens += run_metrics.output_tokens
-        session_metrics.total_tokens += run_metrics.total_tokens
-        session_metrics.audio_input_tokens += run_metrics.audio_input_tokens
-        session_metrics.audio_output_tokens += run_metrics.audio_output_tokens
-        session_metrics.audio_total_tokens += run_metrics.audio_total_tokens
-        session_metrics.cache_read_tokens += run_metrics.cache_read_tokens
-        session_metrics.cache_write_tokens += run_metrics.cache_write_tokens
-        session_metrics.reasoning_tokens += run_metrics.reasoning_tokens
-
-        # Accumulate cost
-        if run_metrics.cost is not None:
-            session_metrics.cost = (session_metrics.cost or 0) + run_metrics.cost
-
-        # Merge provider_metrics
-        if run_metrics.provider_metrics is not None:
-            if session_metrics.provider_metrics is None:
-                session_metrics.provider_metrics = {}
-            session_metrics.provider_metrics.update(run_metrics.provider_metrics)
-
-        # Merge additional_metrics
-        if run_metrics.additional_metrics is not None:
-            if session_metrics.additional_metrics is None:
-                session_metrics.additional_metrics = {}
-            session_metrics.additional_metrics.update(run_metrics.additional_metrics)
-
-        # Calculate average duration
-        session_metrics.total_runs += 1
-        if run_metrics.duration is not None:
-            if session_metrics.average_duration is None:
-                session_metrics.average_duration = run_metrics.duration
-            else:
-                total_duration = (
-                    session_metrics.average_duration * (session_metrics.total_runs - 1) + run_metrics.duration
-                )
-                session_metrics.average_duration = total_duration / session_metrics.total_runs
-
-        # Track per-model metrics from run_metrics.details
-        if run_metrics.details:
-            if session_metrics.details is None:
-                session_metrics.details = []
-
-            details_dict: Dict[Tuple[str, str], ModelMetrics] = {
-                (model_metric.provider, model_metric.id): model_metric for model_metric in session_metrics.details
-            }
-
-            for model_type, model_metrics_list in run_metrics.details.items():
-                for model_metrics in model_metrics_list:
-                    key = (model_metrics.provider, model_metrics.id)
-
-                    if key not in details_dict:
-                        details_dict[key] = ModelMetrics.for_session(
-                            model_metrics, duration=run_metrics.duration, total_runs=1
-                        )
-                    else:
-                        existing = details_dict[key]
-                        existing.accumulate(model_metrics)
-                        existing.total_runs += 1
-                        if run_metrics.duration is not None:
-                            if existing.average_duration is None:
-                                existing.average_duration = run_metrics.duration
-                            else:
-                                total_duration = (
-                                    existing.average_duration * (existing.total_runs - 1) + run_metrics.duration
-                                )
-                                existing.average_duration = total_duration / existing.total_runs
-
-            session_metrics.details = list(details_dict.values())
+        session_metrics.accumulate_from_run(run_response.metrics)
 
     if session.session_data is not None:
         session.session_data["session_metrics"] = session_metrics.to_dict()

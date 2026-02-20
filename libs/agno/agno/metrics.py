@@ -457,6 +457,82 @@ class SessionMetrics:
                 filtered.pop("details", None)
         return cls(**filtered)
 
+    def accumulate_from_run(self, run_metrics: "Metrics") -> None:
+        """Accumulate run-level Metrics into this SessionMetrics.
+
+        Handles token accumulation, cost, provider/additional metrics merging,
+        weighted-average duration, and converting run details
+        (Dict[str, List[ModelMetrics]]) into session details (List[ModelMetrics]).
+
+        Args:
+            run_metrics: The run-level Metrics to fold into this session.
+        """
+        # Accumulate token metrics
+        self.input_tokens += run_metrics.input_tokens
+        self.output_tokens += run_metrics.output_tokens
+        self.total_tokens += run_metrics.total_tokens
+        self.audio_input_tokens += run_metrics.audio_input_tokens
+        self.audio_output_tokens += run_metrics.audio_output_tokens
+        self.audio_total_tokens += run_metrics.audio_total_tokens
+        self.cache_read_tokens += run_metrics.cache_read_tokens
+        self.cache_write_tokens += run_metrics.cache_write_tokens
+        self.reasoning_tokens += run_metrics.reasoning_tokens
+
+        # Accumulate cost
+        if run_metrics.cost is not None:
+            self.cost = (self.cost or 0) + run_metrics.cost
+
+        # Merge provider_metrics
+        if run_metrics.provider_metrics is not None:
+            if self.provider_metrics is None:
+                self.provider_metrics = {}
+            self.provider_metrics.update(run_metrics.provider_metrics)
+
+        # Merge additional_metrics
+        if run_metrics.additional_metrics is not None:
+            if self.additional_metrics is None:
+                self.additional_metrics = {}
+            self.additional_metrics.update(run_metrics.additional_metrics)
+
+        # Calculate weighted-average duration
+        self.total_runs += 1
+        if run_metrics.duration is not None:
+            if self.average_duration is None:
+                self.average_duration = run_metrics.duration
+            else:
+                total_duration = self.average_duration * (self.total_runs - 1) + run_metrics.duration
+                self.average_duration = total_duration / self.total_runs
+
+        # Merge per-model details: Dict[str, List[ModelMetrics]] -> List[ModelMetrics]
+        if run_metrics.details:
+            if self.details is None:
+                self.details = []
+
+            details_dict: Dict[Tuple[str, str], ModelMetrics] = {(m.provider, m.id): m for m in self.details}
+
+            for _model_type, model_metrics_list in run_metrics.details.items():
+                for model_metrics in model_metrics_list:
+                    key = (model_metrics.provider, model_metrics.id)
+
+                    if key not in details_dict:
+                        details_dict[key] = ModelMetrics.for_session(
+                            model_metrics, duration=run_metrics.duration, total_runs=1
+                        )
+                    else:
+                        existing = details_dict[key]
+                        existing.accumulate(model_metrics)
+                        existing.total_runs += 1
+                        if run_metrics.duration is not None:
+                            if existing.average_duration is None:
+                                existing.average_duration = run_metrics.duration
+                            else:
+                                total_duration = (
+                                    existing.average_duration * (existing.total_runs - 1) + run_metrics.duration
+                                )
+                                existing.average_duration = total_duration / existing.total_runs
+
+            self.details = list(details_dict.values())
+
     def __add__(self, other: "SessionMetrics") -> "SessionMetrics":
         """Sum two SessionMetrics objects."""
         other_total_runs = getattr(other, "total_runs", 0)
