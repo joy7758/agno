@@ -1,4 +1,4 @@
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from fastapi.routing import APIRouter
 
@@ -7,11 +7,18 @@ from agno.os.interfaces.base import BaseInterface
 from agno.os.interfaces.telegram.router import (
     DEFAULT_ERROR_MESSAGE,
     DEFAULT_HELP_MESSAGE,
+    DEFAULT_NEW_MESSAGE,
     DEFAULT_START_MESSAGE,
     attach_routes,
 )
 from agno.team import RemoteTeam, Team
 from agno.workflow import RemoteWorkflow, Workflow
+
+DEFAULT_BOT_COMMANDS: List[Dict[str, str]] = [
+    {"command": "start", "description": "Start the bot"},
+    {"command": "help", "description": "Show help"},
+    {"command": "new", "description": "Start a new conversation"},
+]
 
 
 class Telegram(BaseInterface):
@@ -32,6 +39,10 @@ class Telegram(BaseInterface):
         help_message: str = DEFAULT_HELP_MESSAGE,
         error_message: str = DEFAULT_ERROR_MESSAGE,
         stream: bool = False,
+        show_reasoning: bool = False,
+        commands: Optional[List[Dict[str, str]]] = None,
+        register_commands: bool = True,
+        new_message: str = DEFAULT_NEW_MESSAGE,
     ):
         self.agent = agent
         self.team = team
@@ -44,6 +55,10 @@ class Telegram(BaseInterface):
         self.help_message = help_message
         self.error_message = error_message
         self.stream = stream
+        self.show_reasoning = show_reasoning
+        self.commands = commands if commands is not None else DEFAULT_BOT_COMMANDS
+        self.register_commands = register_commands
+        self.new_message = new_message
 
         if not (self.agent or self.team or self.workflow):
             raise ValueError("Telegram requires an agent, team, or workflow")
@@ -62,6 +77,10 @@ class Telegram(BaseInterface):
             help_message=self.help_message,
             error_message=self.error_message,
             stream=self.stream,
+            show_reasoning=self.show_reasoning,
+            commands=self.commands,
+            register_commands=self.register_commands,
+            new_message=self.new_message,
         )
 
         return self.router

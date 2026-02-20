@@ -29,7 +29,7 @@ class TelegramTools(Toolkit):
         enable_send_sticker: Enable send_sticker tool. Defaults to True.
         enable_edit_message: Enable edit_message tool. Defaults to False.
         enable_delete_message: Enable delete_message tool. Defaults to False.
-        all: Enable all tools. Overrides individual flags when True.
+        enable_all: Enable all tools. Overrides individual flags when True.
     """
 
     def __init__(
@@ -46,7 +46,7 @@ class TelegramTools(Toolkit):
         enable_send_sticker: bool = True,
         enable_edit_message: bool = False,
         enable_delete_message: bool = False,
-        all: bool = False,
+        enable_all: bool = False,
         **kwargs: Any,
     ):
         self.token = token or getenv("TELEGRAM_TOKEN")
@@ -63,42 +63,42 @@ class TelegramTools(Toolkit):
 
         tools: List[Any] = []
         if async_mode:
-            if all or enable_send_message:
+            if enable_all or enable_send_message:
                 tools.append(self.send_message_async)
-            if all or enable_send_photo:
+            if enable_all or enable_send_photo:
                 tools.append(self.send_photo_async)
-            if all or enable_send_document:
+            if enable_all or enable_send_document:
                 tools.append(self.send_document_async)
-            if all or enable_send_video:
+            if enable_all or enable_send_video:
                 tools.append(self.send_video_async)
-            if all or enable_send_audio:
+            if enable_all or enable_send_audio:
                 tools.append(self.send_audio_async)
-            if all or enable_send_animation:
+            if enable_all or enable_send_animation:
                 tools.append(self.send_animation_async)
-            if all or enable_send_sticker:
+            if enable_all or enable_send_sticker:
                 tools.append(self.send_sticker_async)
-            if all or enable_edit_message:
+            if enable_all or enable_edit_message:
                 tools.append(self.edit_message_async)
-            if all or enable_delete_message:
+            if enable_all or enable_delete_message:
                 tools.append(self.delete_message_async)
         else:
-            if all or enable_send_message:
+            if enable_all or enable_send_message:
                 tools.append(self.send_message)
-            if all or enable_send_photo:
+            if enable_all or enable_send_photo:
                 tools.append(self.send_photo)
-            if all or enable_send_document:
+            if enable_all or enable_send_document:
                 tools.append(self.send_document)
-            if all or enable_send_video:
+            if enable_all or enable_send_video:
                 tools.append(self.send_video)
-            if all or enable_send_audio:
+            if enable_all or enable_send_audio:
                 tools.append(self.send_audio)
-            if all or enable_send_animation:
+            if enable_all or enable_send_animation:
                 tools.append(self.send_animation)
-            if all or enable_send_sticker:
+            if enable_all or enable_send_sticker:
                 tools.append(self.send_sticker)
-            if all or enable_edit_message:
+            if enable_all or enable_edit_message:
                 tools.append(self.edit_message)
-            if all or enable_delete_message:
+            if enable_all or enable_delete_message:
                 tools.append(self.delete_message)
 
         super().__init__(name="telegram", tools=tools, **kwargs)

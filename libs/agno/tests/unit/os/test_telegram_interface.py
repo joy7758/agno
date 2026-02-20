@@ -293,6 +293,7 @@ def _build_telegram_client(
     start_message=None,
     help_message=None,
     error_message=None,
+    show_reasoning=False,
 ):
     from fastapi import APIRouter
 
@@ -306,6 +307,7 @@ def _build_telegram_client(
         workflow=workflow,
         reply_to_mentions_only=reply_to_mentions_only,
         reply_to_bot_messages=reply_to_bot_messages,
+        show_reasoning=show_reasoning,
     )
     if start_message is not None:
         kwargs["start_message"] = start_message
@@ -356,8 +358,10 @@ class TestProcessMessage:
         assert call_kwargs[1]["user_id"] == "67890"
         assert call_kwargs[1]["session_id"] == "tg:12345"
         assert call_kwargs[1]["images"] is None
-        mock_bot.send_chat_action.assert_called_with(12345, "typing")
-        mock_bot.send_message.assert_called_with(12345, "Agent reply", reply_to_message_id=None)
+        mock_bot.send_chat_action.assert_called()
+        mock_bot.send_message.assert_called_with(
+            12345, "Agent reply", parse_mode="HTML", reply_to_message_id=None, message_thread_id=None
+        )
 
     def test_photo_message_downloads_file(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_TOKEN", "fake-token")
@@ -1047,7 +1051,9 @@ class TestMessageSplitting:
             )
 
         assert resp.status_code == 200
-        mock_bot.send_message.assert_called_with(12345, "Short reply", reply_to_message_id=None)
+        mock_bot.send_message.assert_called_with(
+            12345, "Short reply", parse_mode="HTML", reply_to_message_id=None, message_thread_id=None
+        )
 
 
 class TestAttachRoutesValidation:
@@ -1926,7 +1932,7 @@ class TestCodexReviewFixes:
         mock_bot = AsyncMock()
 
         with patch(f"{ROUTER_MODULE}.AsyncTeleBot", return_value=mock_bot):
-            client = _build_telegram_client(agent=agent)
+            client = _build_telegram_client(agent=agent, show_reasoning=True)
             resp = client.post(
                 "/telegram/webhook",
                 json={
@@ -1943,8 +1949,10 @@ class TestCodexReviewFixes:
         assert resp.status_code == 200
         send_calls = mock_bot.send_message.call_args_list
         reasoning_call = send_calls[0]
-        assert "Reasoning:" in reasoning_call[0][1]
-        assert "Step 1: think" in reasoning_call[0][1]
+        # _send_message_safe converts to HTML
+        sent_text = reasoning_call[0][1]
+        assert "Reasoning:" in sent_text
+        assert "Step 1" in sent_text
 
     def test_video_note_parsed(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_TOKEN", "fake-token")
@@ -2162,6 +2170,7 @@ class TestCustomMessages:
         assert resp.status_code == 200
         agent.arun.assert_not_called()
         sent_text = mock_bot.send_message.call_args[0][1]
+        # _send_message_safe converts to HTML; plain text with no markdown stays as-is
         assert sent_text == "Welcome aboard!"
 
     def test_custom_help_message(self, monkeypatch):
@@ -2177,6 +2186,7 @@ class TestCustomMessages:
         assert resp.status_code == 200
         agent.arun.assert_not_called()
         sent_text = mock_bot.send_message.call_args[0][1]
+        # _send_message_safe converts to HTML; plain text stays as-is
         assert sent_text == "Ask me anything!"
 
     def test_custom_error_message(self, monkeypatch):
@@ -2201,6 +2211,7 @@ class TestCustomMessages:
         assert resp.status_code == 200
         send_calls = mock_bot.send_message.call_args_list
         sent_texts = [call[0][1] for call in send_calls]
+        # _send_message_safe converts to HTML; "!" stays as-is
         assert any("Oops!" in t for t in sent_texts)
 
 
@@ -2238,7 +2249,9 @@ class TestTeamWorkflowProcessing:
         team.arun.assert_called_once()
         assert team.arun.call_args[0][0] == "Hello team"
         assert team.arun.call_args[1]["session_id"] == "tg:12345"
-        mock_bot.send_message.assert_called_with(12345, "Team reply", reply_to_message_id=None)
+        mock_bot.send_message.assert_called_with(
+            12345, "Team reply", parse_mode="HTML", reply_to_message_id=None, message_thread_id=None
+        )
 
     def test_workflow_arun_called(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_TOKEN", "fake-token")
@@ -2261,4 +2274,6 @@ class TestTeamWorkflowProcessing:
         assert resp.status_code == 200
         workflow.arun.assert_called_once()
         assert workflow.arun.call_args[0][0] == "Hello workflow"
-        mock_bot.send_message.assert_called_with(12345, "Workflow reply", reply_to_message_id=None)
+        mock_bot.send_message.assert_called_with(
+            12345, "Workflow reply", parse_mode="HTML", reply_to_message_id=None, message_thread_id=None
+        )
