@@ -426,6 +426,7 @@ class Condition:
         self._prepare_steps()
 
         # If force_else_branch is set (user rejected with on_reject="else"), skip condition evaluation
+        steps_to_execute: WorkflowSteps
         if force_else_branch:
             log_debug(f"Condition {self.name} force_else_branch=True, executing else branch directly")
             if self._has_else_steps():
@@ -580,6 +581,7 @@ class Condition:
         self._prepare_steps()
 
         # If force_else_branch is set (user rejected with on_reject="else"), skip condition evaluation
+        steps_to_execute: WorkflowSteps
         if force_else_branch:
             log_debug(f"Condition {self.name} force_else_branch=True, executing else branch directly")
             condition_result = False  # For event reporting purposes
@@ -809,6 +811,7 @@ class Condition:
         self._prepare_steps()
 
         # If force_else_branch is set (user rejected with on_reject="else"), skip condition evaluation
+        steps_to_execute: WorkflowSteps
         if force_else_branch:
             log_debug(f"Condition {self.name} force_else_branch=True, executing else branch directly")
             if self._has_else_steps():
@@ -961,6 +964,7 @@ class Condition:
         self._prepare_steps()
 
         # If force_else_branch is set (user rejected with on_reject="else"), skip condition evaluation
+        steps_to_execute: WorkflowSteps
         if force_else_branch:
             log_debug(f"Condition {self.name} force_else_branch=True, executing else branch directly")
             condition_result = False  # For event reporting purposes
