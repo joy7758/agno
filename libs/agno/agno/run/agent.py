@@ -283,7 +283,6 @@ class RunPausedEvent(BaseAgentRunEvent):
     event: str = RunEvent.run_paused.value
     tools: Optional[List[ToolExecution]] = None
     requirements: Optional[List[RunRequirement]] = None
-    approval_id: Optional[str] = None
 
     @property
     def is_paused(self):
@@ -630,9 +629,6 @@ class RunOutput:
 
     # User control flow (HITL) requirements to continue a run when paused, in order of arrival
     requirements: Optional[list[RunRequirement]] = None
-
-    # Approval ID of the admin-required approval created when this run paused (if any)
-    approval_id: Optional[str] = None
 
     # === FOREIGN KEY RELATIONSHIPS ===
     # These fields establish relationships to parent workflow/step structures

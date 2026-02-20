@@ -154,7 +154,6 @@ def create_run_paused_event(
     from_run_response: RunOutput,
     tools: Optional[List[ToolExecution]] = None,
     requirements: Optional[List[RunRequirement]] = None,
-    approval_id: Optional[str] = None,
 ) -> RunPausedEvent:
     return RunPausedEvent(
         session_id=from_run_response.session_id,
@@ -163,7 +162,6 @@ def create_run_paused_event(
         run_id=from_run_response.run_id,
         tools=tools,
         requirements=requirements,
-        approval_id=approval_id,
         content=from_run_response.content,
     )
 
@@ -229,7 +227,6 @@ def create_team_run_paused_event(
     from_run_response: TeamRunOutput,
     tools: Optional[List[ToolExecution]] = None,
     requirements: Optional[List[RunRequirement]] = None,
-    approval_id: Optional[str] = None,
 ) -> TeamRunPausedEvent:
     return TeamRunPausedEvent(
         session_id=from_run_response.session_id,
@@ -238,7 +235,6 @@ def create_team_run_paused_event(
         run_id=from_run_response.run_id,
         tools=tools,
         requirements=requirements,
-        approval_id=approval_id,
         content=from_run_response.content,
     )
 

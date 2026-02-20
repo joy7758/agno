@@ -30,6 +30,7 @@ class FakeToolExecution:
     tool_name: Optional[str] = None
     tool_args: Optional[Dict[str, Any]] = None
     approval_type: Optional[str] = None
+    approval_id: Optional[str] = None
     requires_confirmation: Optional[bool] = None
     requires_user_input: Optional[bool] = None
     external_execution_required: Optional[bool] = None
@@ -268,7 +269,8 @@ class TestCreateApprovalFromPause:
 
     def test_returns_approval_id_on_success(self):
         db = MagicMock()
-        rr = FakeRunResponse(tools=[FakeToolExecution(tool_name="delete", approval_type="required")])
+        tool = FakeToolExecution(tool_name="delete", approval_type="required")
+        rr = FakeRunResponse(tools=[tool])
         result = create_approval_from_pause(db=db, run_response=rr, agent_id="a1", agent_name="Agent")
         assert result is not None
         assert isinstance(result, str)
@@ -276,6 +278,8 @@ class TestCreateApprovalFromPause:
         # The returned ID must match what was passed to db.create_approval
         data = db.create_approval.call_args[0][0]
         assert result == data["id"]
+        # approval_id must also be stamped on the tool itself
+        assert tool.approval_id == result
 
 
 # =============================================================================
@@ -314,13 +318,16 @@ class TestAsyncCreateApprovalFromPause:
     async def test_returns_approval_id_on_success(self):
         db = MagicMock()
         db.create_approval = AsyncMock()
-        rr = FakeRunResponse(tools=[FakeToolExecution(tool_name="delete", approval_type="required")])
+        tool = FakeToolExecution(tool_name="delete", approval_type="required")
+        rr = FakeRunResponse(tools=[tool])
         result = await acreate_approval_from_pause(db=db, run_response=rr, agent_id="a1", agent_name="Agent")
         assert result is not None
         assert isinstance(result, str)
         assert len(result) > 0
         data = db.create_approval.call_args[0][0]
         assert result == data["id"]
+        # approval_id must also be stamped on the tool itself
+        assert tool.approval_id == result
 
 
 # =============================================================================

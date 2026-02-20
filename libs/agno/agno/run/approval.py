@@ -42,6 +42,21 @@ def _has_approval_requirement(tools: Optional[List[Any]], requirements: Optional
     return tool is not None and getattr(tool, "approval_type", None) == "required"
 
 
+def _stamp_approval_id_on_tools(
+    tools: Optional[List[Any]], requirements: Optional[List[Any]], approval_id: str
+) -> None:
+    """Stamp approval_id on every tool that has approval_type set."""
+    if tools:
+        for tool in tools:
+            if getattr(tool, "approval_type", None) is not None:
+                tool.approval_id = approval_id
+    if requirements:
+        for req in requirements:
+            te = getattr(req, "tool_execution", None)
+            if te and getattr(te, "approval_type", None) is not None:
+                te.approval_id = approval_id
+
+
 def _build_approval_dict(
     run_response: Any,
     agent_id: Optional[str] = None,
@@ -172,6 +187,8 @@ def create_approval_from_pause(
         )
         db.create_approval(approval_data)
         approval_id: str = approval_data["id"]
+        # Stamp the approval_id on all tools with approval_type
+        _stamp_approval_id_on_tools(tools, requirements, approval_id)
         log_debug(f"Created approval {approval_id} for run {approval_data['run_id']}")
         return approval_id
     except NotImplementedError:
@@ -230,6 +247,8 @@ async def acreate_approval_from_pause(
         else:
             create_fn(approval_data)
         approval_id: str = approval_data["id"]
+        # Stamp the approval_id on all tools with approval_type
+        _stamp_approval_id_on_tools(tools, requirements, approval_id)
         log_debug(f"Created approval {approval_id} for run {approval_data['run_id']}")
         return approval_id
     except NotImplementedError:
