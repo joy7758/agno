@@ -10,7 +10,7 @@ from pydantic import BaseModel, ValidationError
 from agno.exceptions import ModelProviderError, ModelRateLimitError
 from agno.models.base import Model
 from agno.models.message import Citations, DocumentCitation, Message, UrlCitation
-from agno.models.metrics import Metrics
+from agno.models.metrics import MessageMetrics
 from agno.models.response import ModelResponse
 from agno.run.agent import RunOutput
 from agno.tools.function import Function
@@ -600,7 +600,7 @@ class Claude(Model):
             request_kwargs = self._prepare_request_kwargs(system_message, tools=tools, response_format=response_format)
 
             if assistant_message.metrics is None:
-                assistant_message.metrics = Metrics()
+                assistant_message.metrics = MessageMetrics()
             if self._has_beta_features(response_format=response_format, tools=tools):
                 assistant_message.metrics.start_timer()
                 provider_response = self.get_client().beta.messages.create(
@@ -670,7 +670,7 @@ class Claude(Model):
                 run_response.metrics.set_time_to_first_token()
 
             if assistant_message.metrics is None:
-                assistant_message.metrics = Metrics()
+                assistant_message.metrics = MessageMetrics()
             # Beta features
             if self._has_beta_features(response_format=response_format, tools=tools):
                 assistant_message.metrics.start_timer()
@@ -729,7 +729,7 @@ class Claude(Model):
             request_kwargs = self._prepare_request_kwargs(system_message, tools=tools, response_format=response_format)
 
             if assistant_message.metrics is None:
-                assistant_message.metrics = Metrics()
+                assistant_message.metrics = MessageMetrics()
             # Beta features
             if self._has_beta_features(response_format=response_format, tools=tools):
                 assistant_message.metrics.start_timer()
@@ -797,7 +797,7 @@ class Claude(Model):
             request_kwargs = self._prepare_request_kwargs(system_message, tools=tools, response_format=response_format)
 
             if assistant_message.metrics is None:
-                assistant_message.metrics = Metrics()
+                assistant_message.metrics = MessageMetrics()
             if self._has_beta_features(response_format=response_format, tools=tools):
                 assistant_message.metrics.start_timer()
                 async with self.get_async_client().beta.messages.stream(
@@ -1116,17 +1116,17 @@ class Claude(Model):
 
         return model_response
 
-    def _get_metrics(self, response_usage: Union[Usage, MessageDeltaUsage, BetaUsage]) -> Metrics:
+    def _get_metrics(self, response_usage: Union[Usage, MessageDeltaUsage, BetaUsage]) -> MessageMetrics:
         """
-        Parse the given Anthropic-specific usage into an Agno Metrics object.
+        Parse the given Anthropic-specific usage into an Agno MessageMetrics object.
 
         Args:
             response_usage: Usage data from Anthropic
 
         Returns:
-            Metrics: Parsed metrics data
+            MessageMetrics: Parsed metrics data
         """
-        metrics = Metrics()
+        metrics = MessageMetrics()
 
         metrics.input_tokens = response_usage.input_tokens or 0
         metrics.output_tokens = response_usage.output_tokens or 0

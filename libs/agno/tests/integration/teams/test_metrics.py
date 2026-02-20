@@ -4,7 +4,7 @@ import pytest
 
 from agno.agent import Agent
 from agno.eval.agent_as_judge import AgentAsJudgeEval
-from agno.metrics import Metrics, ModelMetrics, SessionMetrics, ToolCallMetrics
+from agno.metrics import ModelMetrics, RunMetrics, SessionMetrics, ToolCallMetrics
 from agno.models.openai import OpenAIChat
 from agno.run.team import TeamRunOutput
 from agno.team.team import Team
@@ -183,7 +183,7 @@ def test_team_metrics_details_structure():
     response = team.run("Say hello.")
 
     assert response.metrics is not None
-    assert isinstance(response.metrics, Metrics)
+    assert isinstance(response.metrics, RunMetrics)
     assert response.metrics.total_tokens > 0
     assert response.metrics.details is not None
     assert "model" in response.metrics.details

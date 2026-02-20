@@ -11,7 +11,7 @@ from agno.agent import Agent
 from agno.exceptions import CheckTrigger, InputCheckError, OutputCheckError
 from agno.models.base import Model
 from agno.models.message import Message
-from agno.models.metrics import Metrics
+from agno.models.metrics import RunMetrics
 from agno.models.response import ModelResponse
 from agno.run import RunStatus
 from agno.run.agent import RunEvent, RunInput, RunOutput
@@ -134,7 +134,7 @@ class MockTestModel(Model):
         self._mock_response.metadata = None
         self._mock_response.provider_data = None
         self._mock_response.extra = None
-        self._mock_response.response_usage = Metrics()
+        self._mock_response.response_usage = RunMetrics()
 
         # Create Mock objects for response methods to track call_args
         self.response = Mock(return_value=self._mock_response)

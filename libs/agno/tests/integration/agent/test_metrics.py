@@ -8,7 +8,7 @@ from agno.db.base import SessionType
 from agno.eval.accuracy import AccuracyEval
 from agno.eval.agent_as_judge import AgentAsJudgeEval
 from agno.memory.manager import MemoryManager
-from agno.metrics import Metrics, ModelMetrics, SessionMetrics, ToolCallMetrics
+from agno.metrics import ModelMetrics, RunMetrics, SessionMetrics, ToolCallMetrics
 from agno.models.openai import OpenAIChat
 from agno.tools.websearch import WebSearchTools
 
@@ -134,7 +134,7 @@ def test_run_metrics_details_structure():
     response = agent.run("Hello")
 
     assert response.metrics is not None
-    assert isinstance(response.metrics, Metrics)
+    assert isinstance(response.metrics, RunMetrics)
     assert response.metrics.total_tokens > 0
     assert response.metrics.details is not None
     assert "model" in response.metrics.details

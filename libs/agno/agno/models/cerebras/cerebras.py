@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from agno.models.base import Model
 from agno.models.message import Message
-from agno.models.metrics import Metrics
+from agno.models.metrics import MessageMetrics
 from agno.models.response import ModelResponse
 from agno.run.agent import RunOutput
 from agno.utils.http import get_default_async_client, get_default_sync_client
@@ -259,7 +259,7 @@ class Cerebras(Model):
             run_response.metrics.set_time_to_first_token()
 
         if assistant_message.metrics is None:
-            assistant_message.metrics = Metrics()
+            assistant_message.metrics = MessageMetrics()
         assistant_message.metrics.start_timer()
         provider_response = self.get_client().chat.completions.create(
             model=self.id,
@@ -295,7 +295,7 @@ class Cerebras(Model):
             run_response.metrics.set_time_to_first_token()
 
         if assistant_message.metrics is None:
-            assistant_message.metrics = Metrics()
+            assistant_message.metrics = MessageMetrics()
         assistant_message.metrics.start_timer()
         provider_response = await self.get_async_client().chat.completions.create(
             model=self.id,
@@ -331,7 +331,7 @@ class Cerebras(Model):
             run_response.metrics.set_time_to_first_token()
 
         if assistant_message.metrics is None:
-            assistant_message.metrics = Metrics()
+            assistant_message.metrics = MessageMetrics()
         assistant_message.metrics.start_timer()
 
         for chunk in self.get_client().chat.completions.create(
@@ -367,7 +367,7 @@ class Cerebras(Model):
             run_response.metrics.set_time_to_first_token()
 
         if assistant_message.metrics is None:
-            assistant_message.metrics = Metrics()
+            assistant_message.metrics = MessageMetrics()
         assistant_message.metrics.start_timer()
 
         async_stream = await self.get_async_client().chat.completions.create(
@@ -586,17 +586,19 @@ class Cerebras(Model):
 
         return complete_tool_calls
 
-    def _get_metrics(self, response_usage: Union[ChatCompletionResponseUsage, ChatChunkResponseUsage]) -> Metrics:
+    def _get_metrics(
+        self, response_usage: Union[ChatCompletionResponseUsage, ChatChunkResponseUsage]
+    ) -> MessageMetrics:
         """
-        Parse the given Cerebras usage into an Agno Metrics object.
+        Parse the given Cerebras usage into an Agno MessageMetrics object.
 
         Args:
             response_usage: Usage data from Cerebras
 
         Returns:
-            Metrics: Parsed metrics data
+            MessageMetrics: Parsed metrics data
         """
-        metrics = Metrics()
+        metrics = MessageMetrics()
 
         metrics.input_tokens = response_usage.prompt_tokens or 0
         metrics.output_tokens = response_usage.completion_tokens or 0
