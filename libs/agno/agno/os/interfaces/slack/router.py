@@ -1,4 +1,3 @@
-import asyncio
 from ssl import SSLContext
 from typing import Any, Dict, List, Optional, Union
 
@@ -83,6 +82,10 @@ def attach_routes(
         if not verify_slack_signature(body, timestamp, slack_signature, signing_secret=signing_secret):
             raise HTTPException(status_code=403, detail="Invalid signature")
 
+        # Slack retries events after ~3s if the previous delivery timed out.
+        # Since we ACK immediately and process in the background, retries are
+        # always duplicates. Trade-off: if the server crashes mid-processing,
+        # the retry that carries the same event won't be reprocessed.
         if request.headers.get("X-Slack-Retry-Num"):
             return SlackEventResponse(status="ok")
 
@@ -96,7 +99,7 @@ def attach_routes(
             event_type = event.get("type")
 
             if event_type == "assistant_thread_started" and streaming:
-                background_tasks.add_task(_handle_thread_started, event, slack_tools.token or "")
+                background_tasks.add_task(_handle_thread_started, event)
             elif (
                 event.get("bot_id")
                 or (event.get("message") or {}).get("bot_id")
@@ -127,34 +130,42 @@ def attach_routes(
             "audio": audio if audio else None,
         }
 
-        response = None
-        if agent:
-            response = await agent.arun(ctx["message_text"], **run_kwargs)  # type: ignore[misc]
-        elif team:
-            response = await team.arun(ctx["message_text"], **run_kwargs)  # type: ignore
-        elif workflow:
-            response = await workflow.arun(ctx["message_text"], **run_kwargs)  # type: ignore
+        try:
+            response = None
+            if agent:
+                response = await agent.arun(ctx["message_text"], **run_kwargs)  # type: ignore[misc]
+            elif team:
+                response = await team.arun(ctx["message_text"], **run_kwargs)  # type: ignore
+            elif workflow:
+                response = await workflow.arun(ctx["message_text"], **run_kwargs)  # type: ignore
 
-        if response:
-            if response.status == "ERROR":
-                log_error(f"Error processing message: {response.content}")
-                send_slack_message(
-                    slack_tools,
-                    channel=ctx["channel_id"],
-                    message="Sorry, there was an error processing your message. Please try again later.",
-                    thread_ts=ctx["ts"],
-                )
-                return
+            if response:
+                if response.status == "ERROR":
+                    log_error(f"Error processing message: {response.content}")
+                    send_slack_message(
+                        slack_tools,
+                        channel=ctx["channel_id"],
+                        message="Sorry, there was an error processing your message. Please try again later.",
+                        thread_ts=ctx["ts"],
+                    )
+                    return
 
-            if hasattr(response, "reasoning_content") and response.reasoning_content:
-                rc = response.reasoning_content
-                formatted = f"*Reasoning:*\n> {rc.replace(chr(10), chr(10) + '> ')}"
-                send_slack_message(slack_tools, channel=ctx["channel_id"], message=formatted, thread_ts=ctx["ts"])
+                if hasattr(response, "reasoning_content") and response.reasoning_content:
+                    rc = str(response.reasoning_content)
+                    formatted = f"*Reasoning:*\n> {rc.replace(chr(10), chr(10) + '> ')}"
+                    send_slack_message(slack_tools, channel=ctx["channel_id"], message=formatted, thread_ts=ctx["ts"])
 
+                content = str(response.content) if response.content else ""
+                send_slack_message(slack_tools, channel=ctx["channel_id"], message=content, thread_ts=ctx["ts"])
+                upload_response_media(slack_tools, response, ctx["channel_id"], ctx["ts"])
+        except Exception as e:
+            log_error(f"Error processing slack event: {e}")
             send_slack_message(
-                slack_tools, channel=ctx["channel_id"], message=response.content or "", thread_ts=ctx["ts"]
+                slack_tools,
+                channel=ctx["channel_id"],
+                message="Sorry, there was an error processing your message.",
+                thread_ts=ctx["ts"],
             )
-            upload_response_media(slack_tools, response, ctx["channel_id"], ctx["ts"])
 
     async def _stream_slack_response(data: dict):
         from slack_sdk.web.async_client import AsyncWebClient
@@ -165,10 +176,9 @@ def attach_routes(
 
         ctx = extract_event_context(event)
 
+        # Slack streaming API (chat_stream) requires a thread_ts.
+        # For non-threaded messages, fall back to the non-streaming path.
         if not event.get("thread_ts"):
-            channel_type = event.get("channel_type", "")
-            if channel_type == "im":
-                return
             await _process_slack_event(event)
             return
 
@@ -223,6 +233,8 @@ def attach_routes(
                     pass
                 return
 
+            # buffer_size=0: we handle text buffering ourselves via state.text_buffer
+            # thresholds (initial_buffer_size for first flush, buffer_size after).
             stream = await async_client.chat_stream(
                 channel=ctx["channel_id"],
                 thread_ts=ctx["ts"],
@@ -256,18 +268,14 @@ def attach_routes(
                         await stream.append(chunks=[{"type": "plan_update", "title": "Working..."}])
                         stream_initialized = True
                     if not state.title_set:
-                        title = ctx["message_text"][:50].strip() or "New conversation"
-
-                        async def _set_title():
-                            try:
-                                await async_client.assistant_threads_setTitle(
-                                    channel_id=ctx["channel_id"], thread_ts=ctx["ts"], title=title
-                                )
-                            except Exception:
-                                pass
-
-                        asyncio.create_task(_set_title())
                         state.title_set = True
+                        title = ctx["message_text"][:50].strip() or "New conversation"
+                        try:
+                            await async_client.assistant_threads_setTitle(
+                                channel_id=ctx["channel_id"], thread_ts=ctx["ts"], title=title
+                            )
+                        except Exception:
+                            pass
 
                     threshold = buffer_size if state.first_flush_done else initial_buffer_size
                     if len(state.text_buffer) >= threshold:
@@ -275,7 +283,7 @@ def attach_routes(
                         state.text_buffer = ""
                         state.first_flush_done = True
 
-            completion_chunks = state.complete_all_pending() if state.progress_started else []
+            completion_chunks = state.resolve_all_pending() if state.progress_started else []
             stop_kwargs: Dict[str, Any] = {}
             if state.text_buffer:
                 stop_kwargs["markdown_text"] = state.text_buffer
@@ -284,25 +292,7 @@ def attach_routes(
             await stream.stop(**stop_kwargs)
 
             # Upload collected media after stream ends
-            media_items: list[tuple[list, str]] = [
-                (state.images, "image.png"),
-                (state.videos, "video.mp4"),
-                (state.audio, "audio.mp3"),
-                (state.files, "file"),
-            ]
-            for items, default_name in media_items:
-                for item in items:
-                    try:
-                        content_bytes = item.get_content_bytes()
-                        if content_bytes:
-                            slack_tools.upload_file(
-                                channel=ctx["channel_id"],
-                                content=content_bytes,
-                                filename=getattr(item, "filename", None) or default_name,
-                                thread_ts=ctx["ts"],
-                            )
-                    except Exception as e:
-                        log_error(f"Failed to upload media: {e}")
+            upload_response_media(slack_tools, state, ctx["channel_id"], ctx["ts"])
 
         except Exception as e:
             log_error(f"Error streaming slack response: {e}")
@@ -324,10 +314,10 @@ def attach_routes(
                 thread_ts=ctx["ts"],
             )
 
-    async def _handle_thread_started(event: dict, token: str):
+    async def _handle_thread_started(event: dict):
         from slack_sdk.web.async_client import AsyncWebClient
 
-        async_client = AsyncWebClient(token=token, ssl=ssl)
+        async_client = AsyncWebClient(token=slack_tools.token, ssl=ssl)
         thread_info = event.get("assistant_thread", {})
         channel_id = thread_info.get("channel_id", "")
         thread_ts = thread_info.get("thread_ts", "")

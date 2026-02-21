@@ -53,10 +53,8 @@ class Slack(BaseInterface):
             raise ValueError("Slack requires an agent, team or workflow")
 
     def get_router(self) -> APIRouter:
-        self.router = APIRouter(prefix=self.prefix, tags=self.tags)  # type: ignore
-
         self.router = attach_routes(
-            router=self.router,
+            router=APIRouter(prefix=self.prefix, tags=self.tags),  # type: ignore
             agent=self.agent,
             team=self.team,
             workflow=self.workflow,

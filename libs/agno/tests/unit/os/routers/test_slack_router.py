@@ -858,8 +858,7 @@ def test_workflow_dispatch_overrides():
         DISPATCH,
         WORKFLOW_DISPATCH,
         handle_content,
-        handle_workflow_content,
-        handle_workflow_run_noop,
+        handle_workflow_noop,
         handle_workflow_step_output,
     )
     from agno.run.team import TeamRunEvent
@@ -867,24 +866,24 @@ def test_workflow_dispatch_overrides():
 
     # Content events are overridden to suppress intermediate text
     assert DISPATCH[RunEvent.run_content.value] is handle_content
-    assert WORKFLOW_DISPATCH[RunEvent.run_content.value] is handle_workflow_content
-    assert WORKFLOW_DISPATCH[TeamRunEvent.run_content.value] is handle_workflow_content
+    assert WORKFLOW_DISPATCH[RunEvent.run_content.value] is handle_workflow_noop
+    assert WORKFLOW_DISPATCH[TeamRunEvent.run_content.value] is handle_workflow_noop
 
     # StepOutput is overridden to capture instead of stream
     assert DISPATCH[WorkflowRunEvent.step_output.value] is handle_content
     assert WORKFLOW_DISPATCH[WorkflowRunEvent.step_output.value] is handle_workflow_step_output
 
     # Nested run lifecycle is overridden to no-op
-    assert WORKFLOW_DISPATCH[RunEvent.run_completed.value] is handle_workflow_run_noop
-    assert WORKFLOW_DISPATCH[TeamRunEvent.run_completed.value] is handle_workflow_run_noop
-    assert WORKFLOW_DISPATCH[RunEvent.run_error.value] is handle_workflow_run_noop
-    assert WORKFLOW_DISPATCH[RunEvent.run_cancelled.value] is handle_workflow_run_noop
+    assert WORKFLOW_DISPATCH[RunEvent.run_completed.value] is handle_workflow_noop
+    assert WORKFLOW_DISPATCH[TeamRunEvent.run_completed.value] is handle_workflow_noop
+    assert WORKFLOW_DISPATCH[RunEvent.run_error.value] is handle_workflow_noop
+    assert WORKFLOW_DISPATCH[RunEvent.run_cancelled.value] is handle_workflow_noop
 
     # Reasoning, tool, and memory events are suppressed in workflow mode
-    assert WORKFLOW_DISPATCH[RunEvent.reasoning_started.value] is handle_workflow_run_noop
-    assert WORKFLOW_DISPATCH[RunEvent.tool_call_started.value] is handle_workflow_run_noop
-    assert WORKFLOW_DISPATCH[RunEvent.tool_call_completed.value] is handle_workflow_run_noop
-    assert WORKFLOW_DISPATCH[RunEvent.memory_update_started.value] is handle_workflow_run_noop
+    assert WORKFLOW_DISPATCH[RunEvent.reasoning_started.value] is handle_workflow_noop
+    assert WORKFLOW_DISPATCH[RunEvent.tool_call_started.value] is handle_workflow_noop
+    assert WORKFLOW_DISPATCH[RunEvent.tool_call_completed.value] is handle_workflow_noop
+    assert WORKFLOW_DISPATCH[RunEvent.memory_update_started.value] is handle_workflow_noop
 
 
 def test_workflow_dispatch_inherits_base():
@@ -906,16 +905,16 @@ def test_workflow_dispatch_inherits_base():
 
 @pytest.mark.asyncio
 async def test_workflow_content_suppressed():
-    """handle_workflow_content suppresses text but collects media."""
-    from agno.os.interfaces.slack.handlers import handle_workflow_content
+    """handle_workflow_noop suppresses text but collects media."""
+    from agno.os.interfaces.slack.handlers import handle_workflow_noop
     from agno.os.interfaces.slack.state import StreamState
 
     state = StreamState()
     chunk = Mock(content="intermediate text", images=None, videos=None, audio=None, files=None)
     stream = AsyncMock()
 
-    result = await handle_workflow_content(chunk, state, stream)
-    assert result == "continue"
+    result = await handle_workflow_noop(chunk, state, stream)
+    assert result is None
     assert state.text_buffer == ""
 
 
@@ -961,7 +960,7 @@ async def test_workflow_completed_emits_final_content():
         files=None,
     )
     result = await handle_workflow_completed(chunk, state, stream)
-    assert result == "continue"
+    assert result is None
     assert "Final article text" in state.text_buffer
 
 
@@ -990,9 +989,9 @@ async def test_workflow_completed_fallback_to_captured():
 
 
 @pytest.mark.asyncio
-async def test_workflow_run_noop_ignores_lifecycle():
-    """handle_workflow_run_noop does not complete cards or break the stream."""
-    from agno.os.interfaces.slack.handlers import handle_workflow_run_noop
+async def test_workflow_noop_ignores_lifecycle():
+    """handle_workflow_noop does not complete cards or break the stream."""
+    from agno.os.interfaces.slack.handlers import handle_workflow_noop
     from agno.os.interfaces.slack.state import StreamState
 
     state = StreamState()
@@ -1001,49 +1000,58 @@ async def test_workflow_run_noop_ignores_lifecycle():
     stream.append = AsyncMock()
 
     chunk = Mock(images=None, videos=None, audio=None, files=None)
-    result = await handle_workflow_run_noop(chunk, state, stream)
-    assert result == "continue"
-    # Card should NOT be completed
-    assert state.task_cards["wf_step_1"].status == "in_progress"
+    result = await handle_workflow_noop(chunk, state, stream)
+    assert result is None
+    # Card should NOT be completed — task_cards stores [title, status]
+    assert state.task_cards["wf_step_1"][1] == "in_progress"
     stream.append.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_structural_handlers_emit_cards():
-    """Parallel, condition, router, steps-container handlers now emit task cards."""
-    from agno.os.interfaces.slack.handlers import (
-        handle_condition_completed,
-        handle_condition_started,
-        handle_parallel_completed,
-        handle_parallel_started,
-        handle_router_completed,
-        handle_router_started,
-        handle_steps_execution_completed,
-        handle_steps_execution_started,
-    )
+    """Structural workflow handlers (parallel, condition, router, steps) emit task cards via _wf_handler factory."""
+    from agno.os.interfaces.slack.handlers import DISPATCH
     from agno.os.interfaces.slack.state import StreamState
+    from agno.run.workflow import WorkflowRunEvent
 
-    handlers = [
-        (handle_parallel_started, handle_parallel_completed, "wf_parallel_p1"),
-        (handle_condition_started, handle_condition_completed, "wf_cond_c1"),
-        (handle_router_started, handle_router_completed, "wf_router_r1"),
-        (handle_steps_execution_started, handle_steps_execution_completed, "wf_steps_s1"),
+    # Each pair: (started_event, completed_event, expected_key_prefix, step_id)
+    handler_pairs = [
+        (
+            WorkflowRunEvent.parallel_execution_started,
+            WorkflowRunEvent.parallel_execution_completed,
+            "wf_parallel_",
+            "p1",
+        ),
+        (
+            WorkflowRunEvent.condition_execution_started,
+            WorkflowRunEvent.condition_execution_completed,
+            "wf_cond_",
+            "c1",
+        ),
+        (WorkflowRunEvent.router_execution_started, WorkflowRunEvent.router_execution_completed, "wf_router_", "r1"),
+        (WorkflowRunEvent.steps_execution_started, WorkflowRunEvent.steps_execution_completed, "wf_steps_", "s1"),
     ]
-    for start_fn, complete_fn, expected_key in handlers:
+    for started_event, completed_event, key_prefix, sid in handler_pairs:
         state = StreamState()
         stream = AsyncMock()
         stream.append = AsyncMock()
 
-        chunk_start = Mock(step_name="test_step", step_id=expected_key.split("_", 2)[-1])
+        start_fn = DISPATCH[started_event.value]
+        complete_fn = DISPATCH[completed_event.value]
+        expected_key = f"{key_prefix}{sid}"
+
+        chunk_start = Mock(step_name="test_step", step_id=sid)
         await start_fn(chunk_start, state, stream)
-        assert expected_key in state.task_cards, f"{start_fn.__name__} did not track card"
-        assert state.task_cards[expected_key].status == "in_progress"
+        assert expected_key in state.task_cards, f"{started_event.value} did not track card"
+        assert state.task_cards[expected_key][1] == "in_progress"
 
         chunk_end = Mock(
             step_name="test_step",
-            step_id=expected_key.split("_", 2)[-1],
-            branch_count=2,
-            selected_step="branch_a",
+            step_id=sid,
+            images=None,
+            videos=None,
+            audio=None,
+            files=None,
         )
         await complete_fn(chunk_end, state, stream)
-        assert state.task_cards[expected_key].status == "complete", f"{complete_fn.__name__} did not complete card"
+        assert state.task_cards[expected_key][1] == "complete", f"{completed_event.value} did not complete card"

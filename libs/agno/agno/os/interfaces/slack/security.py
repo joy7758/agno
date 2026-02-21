@@ -12,12 +12,17 @@ SLACK_SIGNING_SECRET = getenv("SLACK_SIGNING_SECRET")
 def verify_slack_signature(
     body: bytes, timestamp: str, slack_signature: str, signing_secret: Optional[str] = None
 ) -> bool:
+    # Per-instance secret takes priority; fall back to env var for single-app setups.
     secret = signing_secret if signing_secret is not None else SLACK_SIGNING_SECRET
     if not secret:
         raise HTTPException(status_code=500, detail="SLACK_SIGNING_SECRET is not set")
 
-    # Ensure the request timestamp is recent (e.g., to prevent replay attacks)
-    if abs(time.time() - int(timestamp)) > 60 * 5:
+    try:
+        ts = int(timestamp)
+    except (ValueError, TypeError):
+        return False
+
+    if abs(time.time() - ts) > 60 * 5:
         return False
 
     sig_basestring = f"v0:{timestamp}:{body.decode('utf-8')}"

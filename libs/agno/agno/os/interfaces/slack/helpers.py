@@ -40,6 +40,9 @@ def extract_event_context(event: dict) -> Dict[str, Any]:
 
 
 def fetch_mention_files(slack_tools: SlackTools, event: dict, channel_id: str, ts: str) -> dict:
+    # Slack app_mention events sometimes arrive without the files array,
+    # even when the user attached files. Re-fetch from conversations_history
+    # to recover them.
     if event.get("type") != "app_mention" or event.get("files"):
         return event
     try:
@@ -72,7 +75,8 @@ def download_event_files(
             file_content = slack_tools.download_file_bytes(file_id)
             if file_content is not None:
                 if mimetype.startswith("image/"):
-                    images.append(Image(content=file_content, id=file_id))
+                    fmt = mimetype.split("/")[-1]
+                    images.append(Image(content=file_content, id=file_id, mime_type=mimetype, format=fmt))
                 elif mimetype.startswith("video/"):
                     videos.append(Video(content=file_content, mime_type=mimetype))
                 elif mimetype.startswith("audio/"):
@@ -124,10 +128,10 @@ def send_slack_message(
 
     max_len = 39900  # Leave room for batch prefix
     if len(message) <= max_len:
-        slack_tools.send_message_thread(channel=channel, text=_format(message) or "", thread_ts=thread_ts)
+        slack_tools.send_message_thread(channel=channel, text=_format(message), thread_ts=thread_ts)
         return
 
     message_batches = [message[i : i + max_len] for i in range(0, len(message), max_len)]
     for i, batch in enumerate(message_batches, 1):
         batch_message = f"[{i}/{len(message_batches)}] {batch}"
-        slack_tools.send_message_thread(channel=channel, text=_format(batch_message) or "", thread_ts=thread_ts)
+        slack_tools.send_message_thread(channel=channel, text=_format(batch_message), thread_ts=thread_ts)
