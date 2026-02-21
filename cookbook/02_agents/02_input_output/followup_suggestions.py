@@ -2,16 +2,19 @@
 Follow-Up Suggestions
 =============================
 
-Get a full response AND follow-up suggestions from a single agent.
+Get a full free-form response AND structured follow-up suggestions
+from a single agent using two calls.
 
-Uses parser_model so the main model responds freely (full streaming, no
-truncation), then a cheap parser model extracts structured suggestions
-from that response.
+Call 1: The agent responds naturally — full markdown, streaming, no
+        truncation, just a normal response.
+Call 2: Pass output_schema on the run to get structured suggestions.
+        The agent sees its own previous answer via history and generates
+        follow-ups based on it.
 
 Key concepts:
-- output_schema: defines the structured shape (response text + suggestions)
-- parser_model: a second model that reads the free-form response and
-  produces the structured output — the main model is never constrained
+- add_history_to_context: the agent remembers its previous response
+- output_schema passed per-run: only the second call is structured
+- The first call is never constrained by any schema
 
 Example prompts to try:
 - "Which national park is the best?"
@@ -27,7 +30,7 @@ from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
-# Structured Output Schema
+# Structured Output Schema (suggestions only — no need to duplicate response)
 # ---------------------------------------------------------------------------
 class FollowUpSuggestion(BaseModel):
     """A single follow-up suggestion."""
@@ -38,16 +41,12 @@ class FollowUpSuggestion(BaseModel):
     )
 
 
-class ResponseWithSuggestions(BaseModel):
-    """The main response plus follow-up suggestions."""
+class FollowUpSuggestions(BaseModel):
+    """Follow-up suggestions based on the previous response."""
 
-    response: str = Field(
+    suggestions: List[FollowUpSuggestion] = Field(
         ...,
-        description="The full response text from the assistant, copied verbatim",
-    )
-    follow_up_suggestions: List[FollowUpSuggestion] = Field(
-        ...,
-        description="3 follow-up suggestions based on the response",
+        description="3 follow-up suggestions based on the previous response",
         min_length=3,
         max_length=3,
     )
@@ -58,17 +57,18 @@ class ResponseWithSuggestions(BaseModel):
 # ---------------------------------------------------------------------------
 agent = Agent(
     model=OpenAIResponses(id="gpt-5.2"),
-    instructions="You are a knowledgeable assistant. Answer questions thoroughly.",
-    # The schema the parser model will fill in
-    output_schema=ResponseWithSuggestions,
-    # A cheap model extracts structured output from the main response
-    parser_model=OpenAIResponses(id="gpt-5-mini"),
-    parser_model_prompt=(
-        "Extract the assistant's response verbatim into the 'response' field. "
-        "Then generate 3 follow-up suggestions based on the response. "
-        "Each suggestion should cover a different angle: "
-        "one that digs deeper, one practical next step, and one alternative perspective."
-    ),
+    instructions="""\
+You are a knowledgeable assistant. Answer questions thoroughly.
+
+When asked to suggest follow-ups, generate suggestions that cover
+different angles:
+- One that digs deeper into the main topic
+- One that explores a practical next step
+- One that offers an alternative perspective or comparison\
+""",
+    # History lets the second call see the first response
+    add_history_to_context=True,
+    num_history_runs=1,
     markdown=True,
 )
 
@@ -77,19 +77,25 @@ agent = Agent(
 # Run the Agent
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    run: RunOutput = agent.run("Which national park is the best?")
-
-    result: ResponseWithSuggestions = run.content
+    # Call 1: Free-form response — stream it, no schema, no truncation
+    response: RunOutput = agent.run("Which national park is the best?")
 
     print(f"\n{'=' * 60}")
     print("Response:")
     print(f"{'=' * 60}")
-    print(result.response)
+    print(response.content)
+
+    # Call 2: Structured suggestions — agent sees its own answer via history
+    suggestion_run: RunOutput = agent.run(
+        "Based on your previous response, suggest 3 follow-ups.",
+        output_schema=FollowUpSuggestions,
+    )
+    suggestions: FollowUpSuggestions = suggestion_run.content
 
     print(f"\n{'=' * 60}")
     print("Follow-Up Suggestions:")
     print(f"{'=' * 60}")
-    for i, suggestion in enumerate(result.follow_up_suggestions, 1):
+    for i, suggestion in enumerate(suggestions.suggestions, 1):
         print(f"\n  {i}. {suggestion.title}")
         print(f"     {suggestion.reason}")
 
