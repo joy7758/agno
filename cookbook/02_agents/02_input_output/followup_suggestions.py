@@ -1,20 +1,19 @@
 """
-Follow-Up Suggestions
-=============================
+Follow-Up Suggestions (Built-in)
+================================
 
-Get a full free-form response AND structured follow-up suggestions
-from a single agent using two calls.
+Enable built-in follow-up suggestions on any agent with a single flag.
 
-Call 1: The agent responds naturally — full markdown, streaming, no
-        truncation, just a normal response.
-Call 2: Pass output_schema on the run to get structured suggestions.
-        The agent sees its own previous answer via history and generates
-        follow-ups based on it.
+After the main response, the agent automatically makes a second model call
+to generate structured follow-up suggestions and attaches them to RunOutput.
 
 Key concepts:
-- add_history_to_context: the agent remembers its previous response
-- output_schema passed per-run: only the second call is structured
-- The first call is never constrained by any schema
+- follow_up_suggestions=True: enables the feature
+- num_follow_up_suggestions: controls how many suggestions (default 3)
+- follow_up_model: optional cheaper model for generating suggestions
+- run_response.follow_up_suggestions: the structured result
+
+The main response is never constrained — it streams freely as normal text.
 
 Example prompts to try:
 - "Which national park is the best?"
@@ -22,53 +21,20 @@ Example prompts to try:
 - "How do I start investing?"
 """
 
-from typing import List
-
 from agno.agent import Agent, RunOutput
 from agno.models.openai import OpenAIResponses
-from pydantic import BaseModel, Field
-
 
 # ---------------------------------------------------------------------------
-# Structured Output Schema (suggestions only — no need to duplicate response)
-# ---------------------------------------------------------------------------
-class FollowUpSuggestion(BaseModel):
-    """A single follow-up suggestion."""
-
-    title: str = Field(..., description="Short action-oriented suggestion (5-10 words)")
-    reason: str = Field(
-        ..., description="One sentence explaining why this is a good follow-up"
-    )
-
-
-class FollowUpSuggestions(BaseModel):
-    """Follow-up suggestions based on the previous response."""
-
-    suggestions: List[FollowUpSuggestion] = Field(
-        ...,
-        description="3 follow-up suggestions based on the previous response",
-        min_length=3,
-        max_length=3,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Create the Agent
+# Create the Agent — just set follow_up_suggestions=True
 # ---------------------------------------------------------------------------
 agent = Agent(
-    model=OpenAIResponses(id="gpt-5.2"),
-    instructions="""\
-You are a knowledgeable assistant. Answer questions thoroughly.
-
-When asked to suggest follow-ups, generate suggestions that cover
-different angles:
-- One that digs deeper into the main topic
-- One that explores a practical next step
-- One that offers an alternative perspective or comparison\
-""",
-    # History lets the second call see the first response
-    add_history_to_context=True,
-    num_history_runs=1,
+    model=OpenAIResponses(id="gpt-4o"),
+    instructions="You are a knowledgeable assistant. Answer questions thoroughly.",
+    # Enable built-in follow-up suggestions
+    follow_up_suggestions=True,
+    num_follow_up_suggestions=3,
+    # Optionally use a cheaper model for suggestions
+    # follow_up_model=OpenAIResponses(id="gpt-4o-mini"),
     markdown=True,
 )
 
@@ -77,26 +43,23 @@ different angles:
 # Run the Agent
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    # Call 1: Free-form response — stream it, no schema, no truncation
-    response: RunOutput = agent.run("Which national park is the best?")
+    run: RunOutput = agent.run("Which national park is the best?")
 
+    # The main response — full free-form text
     print(f"\n{'=' * 60}")
     print("Response:")
     print(f"{'=' * 60}")
-    print(response.content)
+    print(run.content)
 
-    # Call 2: Structured suggestions — agent sees its own answer via history
-    suggestion_run: RunOutput = agent.run(
-        "Based on your previous response, suggest 3 follow-ups.",
-        output_schema=FollowUpSuggestions,
-    )
-    suggestions: FollowUpSuggestions = suggestion_run.content
-
+    # Follow-up suggestions — structured, attached to RunOutput
     print(f"\n{'=' * 60}")
     print("Follow-Up Suggestions:")
     print(f"{'=' * 60}")
-    for i, suggestion in enumerate(suggestions.suggestions, 1):
-        print(f"\n  {i}. {suggestion.title}")
-        print(f"     {suggestion.reason}")
+    if run.follow_up_suggestions:
+        for i, suggestion in enumerate(run.follow_up_suggestions.suggestions, 1):
+            print(f"\n  {i}. {suggestion.title}")
+            print(f"     {suggestion.reason}")
+    else:
+        print("  No suggestions generated.")
 
     print()

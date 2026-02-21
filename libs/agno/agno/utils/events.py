@@ -7,6 +7,9 @@ from agno.reasoning.step import ReasoningStep
 from agno.run.agent import (
     CompressionCompletedEvent,
     CompressionStartedEvent,
+    FollowUpSuggestions,
+    FollowUpSuggestionsCompletedEvent,
+    FollowUpSuggestionsStartedEvent,
     MemoryUpdateCompletedEvent,
     MemoryUpdateStartedEvent,
     ModelRequestCompletedEvent,
@@ -735,6 +738,30 @@ def create_parser_model_response_completed_event(
         agent_id=from_run_response.agent_id,  # type: ignore
         agent_name=from_run_response.agent_name,  # type: ignore
         run_id=from_run_response.run_id,
+    )
+
+
+def create_follow_up_suggestions_started_event(
+    from_run_response: RunOutput,
+) -> FollowUpSuggestionsStartedEvent:
+    return FollowUpSuggestionsStartedEvent(
+        session_id=from_run_response.session_id,
+        agent_id=from_run_response.agent_id,  # type: ignore
+        agent_name=from_run_response.agent_name,  # type: ignore
+        run_id=from_run_response.run_id,
+    )
+
+
+def create_follow_up_suggestions_completed_event(
+    from_run_response: RunOutput,
+    follow_up_suggestions: Optional[FollowUpSuggestions] = None,
+) -> FollowUpSuggestionsCompletedEvent:
+    return FollowUpSuggestionsCompletedEvent(
+        session_id=from_run_response.session_id,
+        agent_id=from_run_response.agent_id,  # type: ignore
+        agent_name=from_run_response.agent_name,  # type: ignore
+        run_id=from_run_response.run_id,
+        follow_up_suggestions=follow_up_suggestions,
     )
 
 

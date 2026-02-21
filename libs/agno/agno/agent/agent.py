@@ -297,6 +297,14 @@ class Agent:
     # Save the response to a file
     save_response_to_file: Optional[str] = None
 
+    # --- Follow-Up Suggestions ---
+    # If True, generate follow-up suggestions after the main response
+    follow_up_suggestions: bool = False
+    # Number of follow-up suggestions to generate (default 3)
+    num_follow_up_suggestions: int = 3
+    # Optional model to use for generating follow-up suggestions (defaults to agent's model)
+    follow_up_model: Optional[Model] = None
+
     # --- Agent Streaming ---
     # Stream the response from the Agent
     stream: Optional[bool] = None

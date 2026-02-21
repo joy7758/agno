@@ -9,6 +9,10 @@ from agno.agent.agent import (
 )
 from agno.agent.remote import RemoteAgent
 from agno.run.agent import (
+    FollowUpSuggestion,
+    FollowUpSuggestions,
+    FollowUpSuggestionsCompletedEvent,
+    FollowUpSuggestionsStartedEvent,
     MemoryUpdateCompletedEvent,
     MemoryUpdateStartedEvent,
     ReasoningCompletedEvent,
@@ -32,6 +36,10 @@ __all__ = [
     "Agent",
     "RemoteAgent",
     "AgentSession",
+    "FollowUpSuggestion",
+    "FollowUpSuggestions",
+    "FollowUpSuggestionsStartedEvent",
+    "FollowUpSuggestionsCompletedEvent",
     "Function",
     "Message",
     "RunEvent",

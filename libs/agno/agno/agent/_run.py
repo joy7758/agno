@@ -352,6 +352,7 @@ def _run(
     from agno.agent._messages import get_run_messages
     from agno.agent._response import (
         convert_response_to_structured_format,
+        generate_follow_up_suggestions,
         generate_response_with_output_model,
         handle_reasoning,
         parse_response_with_parser_model,
@@ -549,6 +550,9 @@ def _run(
                 # 9. Convert the response to the structured format if needed
                 convert_response_to_structured_format(agent, run_response, run_context=run_context)
 
+                # 9b. Generate follow-up suggestions if enabled
+                generate_follow_up_suggestions(agent, run_response=run_response)
+
                 # 10. Execute post-hooks after output is generated but before response is returned
                 if agent.post_hooks is not None:
                     post_hook_iterator = execute_post_hooks(
@@ -724,6 +728,7 @@ def _run_stream(
     from agno.agent._init import disconnect_connectable_tools
     from agno.agent._messages import get_run_messages
     from agno.agent._response import (
+        generate_follow_up_suggestions_stream,
         generate_response_with_output_model_stream,
         handle_model_response_stream,
         handle_reasoning_stream,
@@ -943,6 +948,13 @@ def _run_stream(
                     run_response=run_response,
                     stream_events=stream_events,
                     run_context=run_context,
+                )
+
+                # 7b. Generate follow-up suggestions if enabled
+                yield from generate_follow_up_suggestions_stream(
+                    agent,  # type: ignore
+                    run_response=run_response,
+                    stream_events=stream_events,
                 )
 
                 # We should break out of the run function
@@ -1393,6 +1405,7 @@ async def _arun(
     from agno.agent._init import disconnect_connectable_tools, disconnect_mcp_tools
     from agno.agent._messages import aget_run_messages
     from agno.agent._response import (
+        agenerate_follow_up_suggestions,
         agenerate_response_with_output_model,
         ahandle_reasoning,
         aparse_response_with_parser_model,
@@ -1596,6 +1609,9 @@ async def _arun(
 
                 # 11. Convert the response to the structured format if needed
                 convert_response_to_structured_format(agent, run_response, run_context=run_context)
+
+                # 11b. Generate follow-up suggestions if enabled
+                await agenerate_follow_up_suggestions(agent, run_response=run_response)
 
                 # 12. Store media if enabled
                 if agent.store_media:
@@ -1878,6 +1894,7 @@ async def _arun_stream(
     from agno.agent._init import disconnect_connectable_tools, disconnect_mcp_tools
     from agno.agent._messages import aget_run_messages
     from agno.agent._response import (
+        agenerate_follow_up_suggestions_stream,
         agenerate_response_with_output_model_stream,
         ahandle_model_response_stream,
         ahandle_reasoning_stream,
@@ -2102,6 +2119,14 @@ async def _arun_stream(
                     run_response=run_response,
                     stream_events=stream_events,
                     run_context=run_context,
+                ):
+                    yield event  # type: ignore
+
+                # 10b. Generate follow-up suggestions if enabled
+                async for event in agenerate_follow_up_suggestions_stream(
+                    agent,
+                    run_response=run_response,
+                    stream_events=stream_events,
                 ):
                     yield event  # type: ignore
 
@@ -2822,6 +2847,7 @@ def _continue_run(
     from agno.agent._init import disconnect_connectable_tools
     from agno.agent._response import (
         convert_response_to_structured_format,
+        generate_follow_up_suggestions,
         generate_response_with_output_model,
         parse_response_with_parser_model,
         update_run_response,
@@ -2882,6 +2908,9 @@ def _continue_run(
 
                 # 4. Convert the response to the structured format if needed
                 convert_response_to_structured_format(agent, run_response, run_context=run_context)
+
+                # 4b. Generate follow-up suggestions if enabled
+                generate_follow_up_suggestions(agent, run_response=run_response)
 
                 # 5. Store media if enabled
                 if agent.store_media:
@@ -3023,7 +3052,11 @@ def _continue_run_stream(
 
     from agno.agent._hooks import execute_post_hooks
     from agno.agent._init import disconnect_connectable_tools
-    from agno.agent._response import handle_model_response_stream, parse_response_with_parser_model_stream
+    from agno.agent._response import (
+        generate_follow_up_suggestions_stream,
+        handle_model_response_stream,
+        parse_response_with_parser_model_stream,
+    )
     from agno.agent._telemetry import log_agent_telemetry
     from agno.agent._tools import handle_tool_call_updates_stream
 
@@ -3077,6 +3110,13 @@ def _continue_run_stream(
                     run_response=run_response,
                     stream_events=stream_events,
                     run_context=run_context,
+                )
+
+                # Generate follow-up suggestions if enabled
+                yield from generate_follow_up_suggestions_stream(
+                    agent,  # type: ignore
+                    run_response=run_response,
+                    stream_events=stream_events,
                 )
 
                 # Yield RunContentCompletedEvent
@@ -3456,6 +3496,7 @@ async def _acontinue_run(
     from agno.agent._init import disconnect_connectable_tools, disconnect_mcp_tools
     from agno.agent._messages import get_continue_run_messages
     from agno.agent._response import (
+        agenerate_follow_up_suggestions,
         agenerate_response_with_output_model,
         aparse_response_with_parser_model,
         convert_response_to_structured_format,
@@ -3617,6 +3658,9 @@ async def _acontinue_run(
 
                 # 10. Convert the response to the structured format if needed
                 convert_response_to_structured_format(agent, run_response, run_context=run_context)
+
+                # 10b. Generate follow-up suggestions if enabled
+                await agenerate_follow_up_suggestions(agent, run_response=run_response)
 
                 # 11. Store media if enabled
                 if agent.store_media:
@@ -3802,6 +3846,7 @@ async def _acontinue_run_stream(
     from agno.agent._init import disconnect_connectable_tools, disconnect_mcp_tools
     from agno.agent._messages import get_continue_run_messages
     from agno.agent._response import (
+        agenerate_follow_up_suggestions_stream,
         agenerate_response_with_output_model_stream,
         ahandle_model_response_stream,
         aparse_response_with_parser_model_stream,
@@ -3992,6 +4037,14 @@ async def _acontinue_run_stream(
                     run_response=run_response,
                     stream_events=stream_events,
                     run_context=run_context,
+                ):
+                    yield event  # type: ignore
+
+                # Generate follow-up suggestions if enabled
+                async for event in agenerate_follow_up_suggestions_stream(
+                    agent,
+                    run_response=run_response,
+                    stream_events=stream_events,
                 ):
                     yield event  # type: ignore
 
