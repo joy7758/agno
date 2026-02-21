@@ -213,6 +213,9 @@ class RemoteDb:
     async def get_trace_session_stats(self, **kwargs: Any) -> "PaginatedResponse[TraceSessionStats]":
         return await self.client.get_trace_session_stats(**kwargs)
 
+    async def search_traces(self, **kwargs: Any) -> "PaginatedResponse[TraceDetail]":
+        return await self.client.search_traces(**kwargs)
+
     # EVALS
     async def get_eval_runs(self, **kwargs: Any) -> "PaginatedResponse[EvalSchema]":
         return await self.client.list_eval_runs(**kwargs)

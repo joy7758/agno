@@ -4,8 +4,10 @@ This module provides a set of filter operators for constructing complex search q
 that can be applied to knowledge bases, vector databases, and other searchable content.
 
 Filter Types:
-    - Comparison: EQ (equals), GT (greater than), LT (less than)
+    - Comparison: EQ (equals), NEQ (not equals), GT (greater than), GTE (greater than or equal),
+      LT (less than), LTE (less than or equal)
     - Inclusion: IN (value in list)
+    - String: CONTAINS (substring match), STARTSWITH (prefix match)
     - Logical: AND, OR, NOT
 
 Example:
@@ -181,6 +183,123 @@ class LT(FilterExpr):
         return {"op": "LT", "key": self.key, "value": self.value}
 
 
+class NEQ(FilterExpr):
+    """Not-equal filter - matches documents where a field does not equal a specific value.
+
+    Args:
+        key: The field name to compare
+        value: The value to compare against
+
+    Example:
+        >>> # Match documents where status is not "archived"
+        >>> filter = NEQ("status", "archived")
+    """
+
+    def __init__(self, key: str, value: Any):
+        self.key = key
+        self.value = value
+
+    def to_dict(self) -> dict:
+        return {"op": "NEQ", "key": self.key, "value": self.value}
+
+
+class GTE(FilterExpr):
+    """Greater than or equal filter - matches documents where a field's value is >= a threshold.
+
+    Args:
+        key: The field name to compare
+        value: The threshold value
+
+    Example:
+        >>> # Match documents where age is 18 or older
+        >>> filter = GTE("age", 18)
+        >>>
+        >>> # Match documents created on or after a certain timestamp
+        >>> filter = GTE("created_at", "2025-01-01T00:00:00Z")
+    """
+
+    def __init__(self, key: str, value: Any):
+        self.key = key
+        self.value = value
+
+    def to_dict(self) -> dict:
+        return {"op": "GTE", "key": self.key, "value": self.value}
+
+
+class LTE(FilterExpr):
+    """Less than or equal filter - matches documents where a field's value is <= a threshold.
+
+    Args:
+        key: The field name to compare
+        value: The threshold value
+
+    Example:
+        >>> # Match documents where age is 65 or younger
+        >>> filter = LTE("age", 65)
+        >>>
+        >>> # Match documents created on or before a certain timestamp
+        >>> filter = LTE("created_at", "2025-12-31T23:59:59Z")
+    """
+
+    def __init__(self, key: str, value: Any):
+        self.key = key
+        self.value = value
+
+    def to_dict(self) -> dict:
+        return {"op": "LTE", "key": self.key, "value": self.value}
+
+
+# ============================================================
+# String Matching Filters
+# ============================================================
+
+
+class CONTAINS(FilterExpr):
+    """Substring match filter - matches documents where a field contains a substring (case-insensitive).
+
+    Args:
+        key: The field name to search
+        value: The substring to search for
+
+    Example:
+        >>> # Match documents where user_id contains "admin"
+        >>> filter = CONTAINS("user_id", "admin")
+        >>>
+        >>> # Match documents where name contains "john"
+        >>> filter = CONTAINS("name", "john")
+    """
+
+    def __init__(self, key: str, value: str):
+        self.key = key
+        self.value = value
+
+    def to_dict(self) -> dict:
+        return {"op": "CONTAINS", "key": self.key, "value": self.value}
+
+
+class STARTSWITH(FilterExpr):
+    """Prefix match filter - matches documents where a field starts with a given string.
+
+    Args:
+        key: The field name to search
+        value: The prefix to match
+
+    Example:
+        >>> # Match documents where name starts with "Agent"
+        >>> filter = STARTSWITH("name", "Agent")
+        >>>
+        >>> # Match documents where session_id starts with "sess_"
+        >>> filter = STARTSWITH("session_id", "sess_")
+    """
+
+    def __init__(self, key: str, value: str):
+        self.key = key
+        self.value = value
+
+    def to_dict(self) -> dict:
+        return {"op": "STARTSWITH", "key": self.key, "value": self.value}
+
+
 # ============================================================
 # Logical Operators
 # ============================================================
@@ -331,6 +450,31 @@ def from_dict(filter_dict: dict) -> FilterExpr:
         if "key" not in filter_dict or "value" not in filter_dict:
             raise ValueError(f"LT filter requires 'key' and 'value' fields. Got: {filter_dict}")
         return LT(filter_dict["key"], filter_dict["value"])
+
+    elif op == "NEQ":
+        if "key" not in filter_dict or "value" not in filter_dict:
+            raise ValueError(f"NEQ filter requires 'key' and 'value' fields. Got: {filter_dict}")
+        return NEQ(filter_dict["key"], filter_dict["value"])
+
+    elif op == "GTE":
+        if "key" not in filter_dict or "value" not in filter_dict:
+            raise ValueError(f"GTE filter requires 'key' and 'value' fields. Got: {filter_dict}")
+        return GTE(filter_dict["key"], filter_dict["value"])
+
+    elif op == "LTE":
+        if "key" not in filter_dict or "value" not in filter_dict:
+            raise ValueError(f"LTE filter requires 'key' and 'value' fields. Got: {filter_dict}")
+        return LTE(filter_dict["key"], filter_dict["value"])
+
+    elif op == "CONTAINS":
+        if "key" not in filter_dict or "value" not in filter_dict:
+            raise ValueError(f"CONTAINS filter requires 'key' and 'value' fields. Got: {filter_dict}")
+        return CONTAINS(filter_dict["key"], filter_dict["value"])
+
+    elif op == "STARTSWITH":
+        if "key" not in filter_dict or "value" not in filter_dict:
+            raise ValueError(f"STARTSWITH filter requires 'key' and 'value' fields. Got: {filter_dict}")
+        return STARTSWITH(filter_dict["key"], filter_dict["value"])
 
     # Logical operators
     elif op == "AND":

@@ -7,8 +7,11 @@ from fastapi.routing import APIRouter
 from agno.db.base import AsyncBaseDb, BaseDb
 from agno.os.auth import get_auth_token_from_request, get_authentication_dependency
 from agno.os.routers.traces.schemas import (
+    TRACE_FILTER_SCHEMA,
+    FilterSchemaResponse,
     TraceDetail,
     TraceNode,
+    TraceSearchRequest,
     TraceSessionStats,
     TraceSummary,
 )
@@ -228,6 +231,25 @@ def attach_routes(router: APIRouter, dbs: dict[str, list[Union[BaseDb, AsyncBase
         except Exception as e:
             log_error(f"Error retrieving traces: {e}")
             raise HTTPException(status_code=500, detail=f"Error retrieving traces: {str(e)}")
+
+    @router.get(
+        "/traces/filter-schema",
+        response_model=FilterSchemaResponse,
+        tags=["Traces"],
+        operation_id="get_traces_filter_schema",
+        summary="Get Trace Filter Schema",
+        description=(
+            "Returns the available filterable fields, their types, valid operators, and enum values.\n\n"
+            "The frontend uses this to dynamically build the filter bar UI:\n"
+            "- Field dropdown populated from `fields[].key`\n"
+            "- Operator dropdown changes per field type\n"
+            "- Value input shows autocomplete for enum fields (e.g., status)\n"
+            "- Logical operators (AND, OR) for combining clauses"
+        ),
+    )
+    async def get_traces_filter_schema():
+        """Return the filter schema for traces (fields, operators, enum values)"""
+        return TRACE_FILTER_SCHEMA
 
     @router.get(
         "/traces/{trace_id}",
@@ -545,5 +567,121 @@ def attach_routes(router: APIRouter, dbs: dict[str, list[Union[BaseDb, AsyncBase
         except Exception as e:
             log_error(f"Error retrieving trace statistics: {e}")
             raise HTTPException(status_code=500, detail=f"Error retrieving statistics: {str(e)}")
+
+    @router.post(
+        "/traces/search",
+        response_model=PaginatedResponse[TraceDetail],
+        response_model_exclude_none=True,
+        tags=["Traces"],
+        operation_id="search_traces",
+        summary="Search Traces with Advanced Filters",
+        description=(
+            "Search traces using the FilterExpr DSL for complex, composable queries.\n\n"
+            "Returns full trace details including hierarchical span tree for each match.\n\n"
+            "**Supported Operators:**\n"
+            "- Comparison: `EQ`, `NEQ`, `GT`, `GTE`, `LT`, `LTE`\n"
+            "- Inclusion: `IN`\n"
+            "- String matching: `CONTAINS` (case-insensitive substring), `STARTSWITH` (prefix)\n"
+            "- Logical: `AND`, `OR`, `NOT`\n\n"
+            "**Filterable Fields:**\n"
+            "trace_id, name, status, start_time, end_time, duration_ms, "
+            "run_id, session_id, user_id, agent_id, team_id, workflow_id, created_at\n\n"
+            "**Example Request Body:**\n"
+            "```json\n"
+            "{\n"
+            '  "filter": {\n'
+            '    "op": "AND",\n'
+            '    "conditions": [\n'
+            '      {"op": "EQ", "key": "status", "value": "OK"},\n'
+            '      {"op": "CONTAINS", "key": "user_id", "value": "admin"}\n'
+            "    ]\n"
+            "  },\n"
+            '  "page": 1,\n'
+            '  "limit": 20\n'
+            "}\n"
+            "```"
+        ),
+        responses={
+            400: {"description": "Invalid filter expression", "model": BadRequestResponse},
+        },
+    )
+    async def search_traces(
+        request: Request,
+        body: TraceSearchRequest,
+        db_id: Optional[str] = Query(default=None, description="Database ID to query traces from"),
+    ):
+        """Search traces using advanced FilterExpr DSL queries. Returns full TraceDetail with span tree."""
+        import time as time_module
+
+        # Get database using db_id or default to first available
+        db = await get_db(dbs, db_id)
+
+        if isinstance(db, RemoteDb):
+            auth_token = get_auth_token_from_request(request)
+            headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else None
+            return await db.search_traces(
+                filter_expr=body.filter,
+                limit=body.limit,
+                page=body.page,
+                db_id=db_id,
+                headers=headers,
+            )
+
+        try:
+            start_time_ms = time_module.time() * 1000
+
+            # Validate filter expression if provided
+            filter_expr_dict = None
+            if body.filter:
+                from agno.filters import from_dict
+
+                from_dict(body.filter)  # Validate structure; raises ValueError if invalid
+                filter_expr_dict = body.filter
+
+            if isinstance(db, AsyncBaseDb):
+                traces, total_count = await db.get_traces(
+                    filter_expr=filter_expr_dict,
+                    limit=body.limit,
+                    page=body.page,
+                )
+            else:
+                traces, total_count = db.get_traces(
+                    filter_expr=filter_expr_dict,
+                    limit=body.limit,
+                    page=body.page,
+                )
+
+            end_time_ms = time_module.time() * 1000
+            search_time_ms = round(end_time_ms - start_time_ms, 2)
+
+            # Calculate total pages
+            total_pages = (total_count + body.limit - 1) // body.limit if body.limit > 0 else 0
+
+            # Build full TraceDetail (with span tree) for each trace
+            trace_details = []
+            for trace in traces:
+                if isinstance(db, AsyncBaseDb):
+                    spans = await db.get_spans(trace_id=trace.trace_id)
+                else:
+                    spans = db.get_spans(trace_id=trace.trace_id)
+
+                trace_details.append(TraceDetail.from_trace_and_spans(trace, spans))
+
+            return PaginatedResponse(
+                data=trace_details,
+                meta=PaginationInfo(
+                    page=body.page,
+                    limit=body.limit,
+                    total_pages=total_pages,
+                    total_count=total_count,
+                    search_time_ms=search_time_ms,
+                ),
+            )
+
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid filter expression: {str(e)}")
+        except Exception as e:
+            log_error(f"Error searching traces: {e}")
+            raise HTTPException(status_code=500, detail=f"Error searching traces: {str(e)}")
 
     return router

@@ -2483,6 +2483,7 @@ class AsyncPostgresDb(AsyncBaseDb):
         end_time: Optional[datetime] = None,
         limit: Optional[int] = 20,
         page: Optional[int] = 1,
+        filter_expr: Optional[Dict[str, Any]] = None,
     ) -> tuple[List, int]:
         """Get traces matching the provided filters with pagination.
 
@@ -2498,6 +2499,7 @@ class AsyncPostgresDb(AsyncBaseDb):
             end_time: Filter traces ending before this datetime.
             limit: Maximum number of traces to return per page.
             page: Page number (1-indexed).
+            filter_expr: Advanced filter expression dict (from FilterExpr.to_dict()).
 
         Returns:
             tuple[List[Trace], int]: Tuple of (list of matching traces, total count).
@@ -2535,6 +2537,14 @@ class AsyncPostgresDb(AsyncBaseDb):
                 if end_time:
                     # Convert datetime to ISO string for comparison
                     base_stmt = base_stmt.where(table.c.end_time <= end_time.isoformat())
+
+                # Apply advanced filter expression
+                if filter_expr:
+                    from agno.db.filter_converter import TRACE_COLUMNS, filter_expr_to_sqlalchemy
+
+                    base_stmt = base_stmt.where(
+                        filter_expr_to_sqlalchemy(filter_expr, table, allowed_columns=TRACE_COLUMNS)
+                    )
 
                 # Get total count
                 count_stmt = select(func.count()).select_from(base_stmt.alias())
