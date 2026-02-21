@@ -46,7 +46,7 @@ def attach_routes(
     loading_messages: Optional[List[str]] = None,
     task_display_mode: str = "plan",
     buffer_size: int = 256,
-    initial_buffer_size: int = 1,
+    initial_buffer_size: int = 1,  # Flush first token immediately, then batch for efficiency
     suggested_prompts: Optional[List[Dict[str, str]]] = None,
     ssl: Optional[SSLContext] = None,
 ) -> APIRouter:
@@ -100,6 +100,7 @@ def attach_routes(
 
             if event_type == "assistant_thread_started" and streaming:
                 background_tasks.add_task(_handle_thread_started, event)
+            # message_changed events nest the original message; check both levels
             elif (
                 event.get("bot_id")
                 or (event.get("message") or {}).get("bot_id")

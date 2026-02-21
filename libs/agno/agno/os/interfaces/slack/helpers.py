@@ -82,6 +82,7 @@ def download_event_files(
                 elif mimetype.startswith("audio/"):
                     audio.append(Audio(content=file_content, mime_type=mimetype))
                 else:
+                    # Unknown MIME types: still pass the file but without mime_type to avoid rejection
                     safe_mime = mimetype if mimetype in File.valid_mime_types() else None
                     files.append(File(content=file_content, filename=filename, mime_type=safe_mime))
         except Exception as e:

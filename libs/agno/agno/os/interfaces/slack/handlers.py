@@ -8,15 +8,6 @@ from agno.run.workflow import WorkflowRunEvent
 
 _BOT_SUBTYPES = frozenset({"bot_message", "bot_add", "bot_remove", "bot_enable", "bot_disable"})
 
-_MAX_OUTPUT = 200
-
-
-def _truncate(text: str, limit: int = _MAX_OUTPUT) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "..."
-
-
 HandlerFn = Callable[..., Coroutine[Any, Any, Optional[Literal["break"]]]]
 
 
@@ -30,7 +21,7 @@ async def _emit_task(
 ) -> None:
     chunk: dict = {"type": "task_update", "id": task_id, "title": title, "status": status}
     if output:
-        chunk["output"] = _truncate(output)
+        chunk["output"] = output[:200]
     await stream.append(chunks=[chunk])
 
 
@@ -270,6 +261,7 @@ def _wf_handler(prefix: str, label: str, *, started: bool, name_attr: str = "ste
     return _handler
 
 
+# Defensive: step_error event exists in enum but is not currently emitted
 async def handle_step_error(chunk: Any, state: StreamState, stream: Any) -> Optional[Literal["break"]]:
     step_name = getattr(chunk, "step_name", None) or "step"
     sid = getattr(chunk, "step_id", None) or step_name

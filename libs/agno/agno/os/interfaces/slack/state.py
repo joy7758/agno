@@ -21,6 +21,7 @@ class StreamState:
     audio: list = field(default_factory=list)
     files: list = field(default_factory=list)
 
+    # Used by router to select DISPATCH (agent/team) vs WORKFLOW_DISPATCH (workflow)
     entity_type: str = "agent"
     entity_name: str = ""
 
