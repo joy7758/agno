@@ -13,7 +13,6 @@ from agno.os.interfaces.slack.handlers import (
 from agno.os.interfaces.slack.helpers import (
     download_event_files,
     extract_event_context,
-    fetch_mention_files,
     send_slack_message,
     should_respond,
     upload_response_media,
@@ -72,6 +71,8 @@ def attach_routes(
         },
     )
     async def slack_events(request: Request, background_tasks: BackgroundTasks):
+        # ACK immediately, process in background. Slack retries after ~3s if it
+        # doesn't get a 200, so long-running agent calls must not block the response.
         body = await request.body()
         timestamp = request.headers.get("X-Slack-Request-Timestamp")
         slack_signature = request.headers.get("X-Slack-Signature", "")
@@ -119,7 +120,6 @@ def attach_routes(
             return
 
         ctx = extract_event_context(event)
-        event = fetch_mention_files(slack_tools, event, ctx["channel_id"], ctx["ts"])
         files, images, videos, audio = download_event_files(slack_tools, event)
 
         run_kwargs: Dict[str, Any] = {
@@ -177,8 +177,8 @@ def attach_routes(
 
         ctx = extract_event_context(event)
 
-        # Slack streaming API (chat_stream) requires a thread_ts.
-        # For non-threaded messages, fall back to the non-streaming path.
+        # chat_stream requires a thread_ts (Slack creates the stream inside a thread).
+        # Non-threaded channel messages don't have one, so fall back to non-streaming.
         if not event.get("thread_ts"):
             await _process_slack_event(event)
             return
@@ -203,7 +203,6 @@ def attach_routes(
             except Exception:
                 pass
 
-            event = fetch_mention_files(slack_tools, event, ctx["channel_id"], ctx["ts"])
             files, images, videos, audio = download_event_files(slack_tools, event)
 
             response_stream = None
@@ -234,8 +233,9 @@ def attach_routes(
                     pass
                 return
 
-            # buffer_size=0: we handle text buffering ourselves via state.text_buffer
-            # thresholds (initial_buffer_size for first flush, buffer_size after).
+            # buffer_size=0 disables SDK-level buffering — we manage our own via
+            # state.text_buffer with two thresholds: initial_buffer_size flushes the
+            # first token fast (responsive feel), then buffer_size batches the rest.
             stream = await async_client.chat_stream(
                 channel=ctx["channel_id"],
                 thread_ts=ctx["ts"],

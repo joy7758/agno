@@ -50,7 +50,7 @@ class Slack(BaseInterface):
         self.ssl = ssl
 
         if not (self.agent or self.team or self.workflow):
-            raise ValueError("Slack requires an agent, team or workflow")
+            raise ValueError("Slack requires an agent, team, or workflow")
 
     def get_router(self) -> APIRouter:
         self.router = attach_routes(

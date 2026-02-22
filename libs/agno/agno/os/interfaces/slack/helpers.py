@@ -39,22 +39,6 @@ def extract_event_context(event: dict) -> Dict[str, Any]:
     }
 
 
-def fetch_mention_files(slack_tools: SlackTools, event: dict, channel_id: str, ts: str) -> dict:
-    # Slack app_mention events sometimes arrive without the files array,
-    # even when the user attached files. Re-fetch from conversations_history
-    # to recover them.
-    if event.get("type") != "app_mention" or event.get("files"):
-        return event
-    try:
-        result = slack_tools.client.conversations_history(channel=channel_id, latest=ts, inclusive=True, limit=1)
-        messages: list = result.get("messages", [])
-        if messages and messages[0].get("files"):
-            return {**event, "files": messages[0]["files"]}
-    except Exception as e:
-        log_error(f"Failed to fetch files for app_mention: {e}")
-    return event
-
-
 def download_event_files(
     slack_tools: SlackTools, event: dict
 ) -> Tuple[List[File], List[Image], List[Video], List[Audio]]:
