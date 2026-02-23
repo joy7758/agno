@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import time
@@ -15,8 +16,8 @@ class ExecutionIntegrityCore:
         entry = {
             "timestamp": ts,
             "action": action,
-            "input": input_data,
-            "output": output_data,
+            "input": copy.deepcopy(input_data),
+            "output": copy.deepcopy(output_data),
             "previous_hash": self.previous_hash,
         }
 
